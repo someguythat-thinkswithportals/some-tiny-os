@@ -1,0 +1,303 @@
+#include "syscall.h"
+#include "idt.h"
+#include "vga.h"
+#include "keyboard.h"
+#include "timer.h"
+#include "fs.h"
+#include "io.h"
+#include "serial.h"
+#include "elf.h"
+#include "memory.h"
+#include "cmos.h"
+#include "scheduler.h"
+#include "pipe.h"
+
+#define EXEC_BUF_SIZE 65536
+
+
+
+static void syscall_handler(registers_t* r) {
+    switch (r->rax) {
+        case 0: {
+            int fd = (int)r->rdi;
+            if (fd == 1 || fd == 2) {
+                vga_write((const char*)r->rsi, r->rdx);
+                serial_write((const char*)r->rsi, r->rdx);
+                r->rax = r->rdx;
+            } else if (fd >= 3 && fd < MAX_FDS &&
+                       current_task->fd_type[fd] == FD_PIPE_WRITE) {
+                r->rax = pipe_write((pipe_t*)current_task->fd_data[fd],
+                                    (const char*)r->rsi, (int)r->rdx);
+            } else {
+                r->rax = -1;
+            }
+            break;
+        }
+        case 1: {
+            int fd = (int)r->rdi;
+            if (fd == 0) {
+                *(char*)r->rsi = keyboard_read();
+                r->rax = 1;
+            } else if (fd >= 3 && fd < MAX_FDS &&
+                       current_task->fd_type[fd] == FD_PIPE_READ) {
+                r->rax = pipe_read((pipe_t*)current_task->fd_data[fd],
+                                   (char*)r->rsi, (int)r->rdx);
+            } else {
+                r->rax = -1;
+            }
+            break;
+        }
+        case 2:
+            timer_sleep(r->rdi);
+            r->rax = 0;
+            break;
+        case 3:
+            r->rax = timer_ticks();
+            break;
+        case 4:
+            vga_clear(VGA_BLACK);
+            r->rax = 0;
+            break;
+        case 5: {
+            const char* filename = "shell";
+            uint64_t new_cr3 = paging_create();
+            if (!new_cr3) { r->rax = -1; break; }
+            uint64_t entry;
+            if (elf_load_into_address_space(new_cr3, filename, &entry) < 0) {
+                paging_destroy(new_cr3);
+                r->rax = -1;
+                break;
+            }
+            uint64_t old_cr3 = current_task->cr3;
+            current_task->cr3 = new_cr3;
+            paging_switch(new_cr3);
+            if (old_cr3 != 0x1000)
+                paging_destroy(old_cr3);
+            r->rip = entry;
+            r->rsp = 0x500000;
+            r->cs = 0x1B;
+            r->ss = 0x23;
+            r->rflags = 0x202;
+            r->rax = 0;
+            break;
+        }
+        case 6:
+            r->rax = fs_ls((const char*)r->rdi, (char*)r->rsi, r->rdx);
+            break;
+        case 7:
+            r->rax = fs_cd((const char*)r->rsi);
+            break;
+        case 8:
+            r->rax = fs_cat((const char*)r->rdi, (char*)r->rsi, r->rdx);
+            break;
+        case 9:
+            {
+                uint8_t good = 0x02;
+                while (good & 0x02) good = inb(0x64);
+                outb(0x64, 0xFE);
+            }
+            r->rax = 0;
+            break;
+        case 10:
+            outw(0x604, 0x2000);
+            outw(0xB004, 0x2000);
+            r->rax = 0;
+            break;
+        case 11:
+            serial_write((const char*)r->rdi, r->rsi);
+            r->rax = r->rsi;
+            break;
+        case 12:
+            r->rax = fs_mkdir((const char*)r->rdi);
+            break;
+        case 13:
+            r->rax = fs_rmdir((const char*)r->rdi);
+            break;
+        case 14:
+            r->rax = fs_delete((const char*)r->rdi);
+            break;
+        case 15:
+            r->rax = fs_rename((const char*)r->rdi, (const char*)r->rsi);
+            break;
+        case 16:
+            r->rax = fs_copy((const char*)r->rdi, (const char*)r->rsi);
+            break;
+        case 17: {
+            const char* filename = (const char*)r->rdi;
+            uint64_t new_cr3 = paging_create();
+            if (!new_cr3) { r->rax = -1; break; }
+            uint64_t entry;
+            if (elf_load_into_address_space(new_cr3, filename, &entry) < 0) {
+                paging_destroy(new_cr3);
+                r->rax = -1;
+                break;
+            }
+            uint64_t old_cr3 = current_task->cr3;
+            current_task->cr3 = new_cr3;
+            paging_switch(new_cr3);
+
+            if (old_cr3 != 0x1000)
+                paging_destroy(old_cr3);
+
+            r->rip = entry;
+            r->rsp = 0x500000;
+            r->cs = 0x1B;
+            r->ss = 0x23;
+            r->rflags = 0x202;
+            r->rax = 0;
+            break;
+        }
+        case 18: {
+            rtc_datetime_t dt;
+            cmos_read_datetime(&dt);
+            char* buf = (char*)r->rdi;
+            uint64_t size = r->rsi;
+            if (size >= 20) {
+                buf[0] = '0' + (dt.year / 1000) % 10;
+                buf[1] = '0' + (dt.year / 100) % 10;
+                buf[2] = '0' + (dt.year / 10) % 10;
+                buf[3] = '0' + dt.year % 10;
+                buf[4] = '-';
+                buf[5] = '0' + dt.month / 10;
+                buf[6] = '0' + dt.month % 10;
+                buf[7] = '-';
+                buf[8] = '0' + dt.day / 10;
+                buf[9] = '0' + dt.day % 10;
+                buf[10] = ' ';
+                buf[11] = '0' + dt.hour / 10;
+                buf[12] = '0' + dt.hour % 10;
+                buf[13] = ':';
+                buf[14] = '0' + dt.minute / 10;
+                buf[15] = '0' + dt.minute % 10;
+                buf[16] = ':';
+                buf[17] = '0' + dt.second / 10;
+                buf[18] = '0' + dt.second % 10;
+                buf[19] = '\n';
+                r->rax = 20;
+            } else {
+                r->rax = 0;
+            }
+            break;
+        }
+        case 19: {
+            uint64_t current_rsp;
+            __asm__ volatile("mov %%rsp, %0" : "=r"(current_rsp));
+            r->rax = sys_fork(current_rsp, current_task->cr3, r);
+            break;
+        }
+        case 20:
+            sys_exit((int)r->rdi);
+            r->rax = 0;
+            break;
+        case 21:
+            r->rax = sys_waitpid((uint32_t)r->rdi);
+            break;
+        case 22: {
+            int64_t increment = (int64_t)r->rdi;
+            static uint64_t heap_break = 0x510000;
+            uint64_t old_break = heap_break;
+
+            if (increment < 0) {
+                int64_t new_break = (int64_t)heap_break + increment;
+                if (new_break < 0x510000) new_break = 0x510000;
+                heap_break = (uint64_t)new_break;
+            } else if (increment > 0) {
+                uint64_t new_break = heap_break + (uint64_t)increment;
+                uint64_t page_aligned_old = (heap_break + 0xFFF) & ~0xFFFULL;
+                uint64_t page_aligned_new = (new_break + 0xFFF) & ~0xFFFULL;
+
+                if (page_aligned_new > page_aligned_old) {
+                    for (uint64_t page = page_aligned_old; page < page_aligned_new; page += 0x1000) {
+                        if (page >= 0x600000) {
+                            r->rax = (uint64_t)-1;
+                            goto sbrk_done;
+                        }
+                        uint64_t page_phys = (uint64_t)memory_alloc_page();
+                        if (!page_phys) {
+                            r->rax = (uint64_t)-1;
+                            goto sbrk_done;
+                        }
+                        memory_set((void*)page_phys, 0, 4096);
+                        paging_map_4kb(current_task->cr3, page, page_phys,
+                                       PAGE_PRESENT | PAGE_RW | PAGE_USER);
+                    }
+                }
+                heap_break = new_break;
+            }
+            r->rax = old_break;
+sbrk_done:
+            break;
+        }
+        case 23: {
+            int free1 = -1, free2 = -1;
+            for (int i = 3; i < MAX_FDS; i++) {
+                if (current_task->fd_type[i] == 0) {
+                    if (free1 == -1) free1 = i;
+                    else { free2 = i; break; }
+                }
+            }
+            if (free1 == -1 || free2 == -1) {
+                r->rax = -1;
+                break;
+            }
+            pipe_t* p = pipe_create();
+            if (!p) {
+                r->rax = -1;
+                break;
+            }
+            current_task->fd_type[free1] = FD_PIPE_READ;
+            current_task->fd_data[free1] = p;
+            current_task->fd_type[free2] = FD_PIPE_WRITE;
+            current_task->fd_data[free2] = p;
+            int* user_fds = (int*)r->rdi;
+            user_fds[0] = free1;
+            user_fds[1] = free2;
+            r->rax = 0;
+            break;
+        }
+        case 24: {
+            int oldfd = (int)r->rdi;
+            int newfd = (int)r->rsi;
+            if (oldfd < 0 || oldfd >= MAX_FDS || newfd < 0 || newfd >= MAX_FDS) {
+                r->rax = -1;
+                break;
+            }
+            if (current_task->fd_type[oldfd] == 0) {
+                r->rax = -1;
+                break;
+            }
+            if (current_task->fd_type[newfd] != 0) {
+                if (current_task->fd_type[newfd] == FD_PIPE_READ)
+                    pipe_close_end(current_task->fd_data[newfd], 0);
+                else if (current_task->fd_type[newfd] == FD_PIPE_WRITE)
+                    pipe_close_end(current_task->fd_data[newfd], 1);
+            }
+            current_task->fd_type[newfd] = current_task->fd_type[oldfd];
+            current_task->fd_data[newfd] = current_task->fd_data[oldfd];
+            r->rax = newfd;
+            break;
+        }
+        case 25: {
+            int fd = (int)r->rdi;
+            if (fd < 0 || fd >= MAX_FDS || fd < 3) {
+                r->rax = -1;
+                break;
+            }
+            if (current_task->fd_type[fd] == FD_PIPE_READ)
+                pipe_close_end(current_task->fd_data[fd], 0);
+            else if (current_task->fd_type[fd] == FD_PIPE_WRITE)
+                pipe_close_end(current_task->fd_data[fd], 1);
+            current_task->fd_type[fd] = 0;
+            current_task->fd_data[fd] = 0;
+            r->rax = 0;
+            break;
+        }
+        default:
+            r->rax = -1;
+            break;
+    }
+}
+
+void syscall_init(void) {
+    idt_register_handler(0x80, syscall_handler);
+}

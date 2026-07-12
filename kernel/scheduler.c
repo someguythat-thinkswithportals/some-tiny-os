@@ -1,0 +1,259 @@
+#include "scheduler.h"
+#include "serial.h"
+#include "vga.h"
+#include "memory.h"
+#include "gdt.h"
+#include "pipe.h"
+
+static task_t task_pool[MAX_TASKS];
+static int task_count;
+task_t* current_task;
+static task_t* task_list;
+static uint32_t next_pid;
+
+volatile uint64_t* pending_switch;
+volatile uint64_t pending_rsp;
+volatile uint64_t pending_cr3;
+
+task_t* get_current_task(void) {
+    return current_task;
+}
+
+static task_t* scheduler_next(void) {
+    if (!current_task || !current_task->next) return task_list;
+    task_t* start = current_task;
+    task_t* t = start->next;
+    while (t != start) {
+        if (!t) { t = task_list; continue; }
+        if (t->state == TASK_READY) return t;
+        t = t->next;
+        if (t == start) break;
+    }
+    return start;
+}
+
+void scheduler_init(void) {
+    task_count = 0;
+    task_list = NULL;
+    next_pid = 1;
+    pending_switch = NULL;
+    pending_rsp = 0;
+    pending_cr3 = 0;
+
+    task_t* main_task = &task_pool[task_count++];
+    int i;
+    for (i = 0; "main"[i]; i++) main_task->name[i] = "main"[i];
+    main_task->name[i] = 0;
+    main_task->pid = 0;
+    main_task->state = TASK_RUNNING;
+    main_task->rsp = 0;
+    main_task->stack_base = 0;
+    main_task->cr3 = 0x1000;
+    main_task->parent_pid = 0;
+    main_task->exit_code = 0;
+    main_task->waited = 0;
+    vm_region_init(main_task->vm_regions);
+    for (int i = 0; i < MAX_FDS; i++) {
+        main_task->fd_type[i] = 0;
+        main_task->fd_data[i] = 0;
+    }
+    current_task = main_task;
+    task_list = main_task;
+    main_task->next = main_task;
+
+    serial_write("SCHED INIT\n", 11);
+}
+
+int task_create(const char* name, void (*entry)(void)) {
+    if (task_count >= MAX_TASKS) return -1;
+
+    task_t* task = &task_pool[task_count];
+    int i;
+    for (i = 0; i < TASK_NAME_MAX - 1 && name[i]; i++) {
+        task->name[i] = name[i];
+    }
+    task->name[i] = 0;
+    task->pid = next_pid++;
+    task->state = TASK_READY;
+    task->cr3 = 0x1000;
+    task->parent_pid = 0;
+    task->exit_code = 0;
+    task->waited = 0;
+    vm_region_init(task->vm_regions);
+    for (int i = 0; i < MAX_FDS; i++) {
+        task->fd_type[i] = 0;
+        task->fd_data[i] = 0;
+    }
+
+    task->stack_base = (uint64_t)memory_alloc(STACK_SIZE);
+    if (!task->stack_base) return -1;
+    memory_set((void*)task->stack_base, 0, STACK_SIZE);
+
+    uint64_t* sp = (uint64_t*)(task->stack_base + STACK_SIZE);
+    *--sp = 0x10;
+    *--sp = task->stack_base + STACK_SIZE - 256;
+    *--sp = 0x202;
+    *--sp = 0x08;
+    *--sp = (uint64_t)entry;
+    *--sp = 0;
+    *--sp = 0;
+    for (int j = 0; j < 15; j++) *--sp = 0;
+    task->rsp = (uint64_t)sp;
+
+    task_t* last = task_list;
+    while (last->next != task_list) last = last->next;
+    last->next = task;
+    task->next = task_list;
+
+    task_count++;
+    return task->pid;
+}
+
+void scheduler_yield(void) {
+    __asm__ volatile("int $32");
+}
+
+void scheduler_tick(void) {
+    if (!task_list || task_count < 2) return;
+
+    task_t* next = scheduler_next();
+    if (!next || next == current_task) return;
+
+    task_t* old = current_task;
+    if (old->state == TASK_RUNNING)
+        old->state = TASK_READY;
+    current_task = next;
+    current_task->state = TASK_RUNNING;
+
+    tss_set_rsp0(next->stack_base + STACK_SIZE);
+
+    pending_switch = &old->rsp;
+    pending_rsp = next->rsp;
+    pending_cr3 = next->cr3;
+}
+
+int sys_fork(uint64_t parent_rsp, uint64_t parent_cr3, registers_t* r) {
+    if (task_count >= MAX_TASKS) return -1;
+
+    task_t* parent = current_task;
+    task_t* child = &task_pool[task_count];
+
+    int i;
+    for (i = 0; i < TASK_NAME_MAX - 1 && parent->name[i]; i++)
+        child->name[i] = parent->name[i];
+    child->name[i] = 0;
+    child->pid = next_pid++;
+    child->state = TASK_READY;
+    child->parent_pid = parent->pid;
+    child->exit_code = 0;
+    child->waited = 0;
+    vm_region_copy(child->vm_regions, parent->vm_regions);
+    task_copy_fds(child, parent);
+
+    child->stack_base = (uint64_t)memory_alloc(STACK_SIZE);
+    if (!child->stack_base) return -1;
+    memory_copy((void*)child->stack_base, (void*)parent->stack_base, STACK_SIZE);
+
+    uint64_t offset = parent_rsp - parent->stack_base;
+    child->rsp = child->stack_base + offset;
+
+    registers_t* child_r = (registers_t*)(child->stack_base + ((uint64_t)r - (uint64_t)parent->stack_base));
+    child_r->rax = 0;
+
+    child->cr3 = paging_create();
+    if (!child->cr3) {
+        memory_free((void*)child->stack_base);
+        child->state = TASK_ZOMBIE;
+        return -1;
+    }
+    if (paging_cow_clone_user(child->cr3, parent_cr3) < 0) {
+        paging_destroy(child->cr3);
+        memory_free((void*)child->stack_base);
+        child->state = TASK_ZOMBIE;
+        return -1;
+    }
+
+    task_t* last = task_list;
+    while (last->next != task_list) last = last->next;
+    last->next = child;
+    child->next = task_list;
+
+    task_count++;
+    return child->pid;
+}
+
+void sys_exit(int code) {
+    task_close_fds(current_task);
+    current_task->state = TASK_ZOMBIE;
+    current_task->exit_code = code;
+
+    task_t* t = task_list;
+    while (t) {
+        if (t->state != TASK_ZOMBIE && t->state != TASK_RUNNING) {
+            t = t->next;
+            if (t == task_list) break;
+            continue;
+        }
+        break;
+    }
+
+    __asm__ volatile("int $32");
+    while (1) { __asm__ volatile("hlt"); }
+}
+
+void scheduler_remove_zombie(uint32_t pid) {
+    for (int i = 0; i < task_count; i++) {
+        if (task_pool[i].pid == pid && task_pool[i].state == TASK_ZOMBIE && task_pool[i].waited) {
+            if (task_pool[i].stack_base) {
+                memory_free((void*)task_pool[i].stack_base);
+                task_pool[i].stack_base = 0;
+            }
+            if (task_pool[i].cr3 && task_pool[i].cr3 != 0x1000) {
+                paging_destroy(task_pool[i].cr3);
+                task_pool[i].cr3 = 0;
+            }
+            task_pool[i].pid = 0;
+            task_pool[i].state = TASK_READY;
+            break;
+        }
+    }
+}
+
+int sys_waitpid(uint32_t pid) {
+    task_t* t = task_list->next;
+    while (t != task_list) {
+        if (!t) { t = task_list->next; continue; }
+        if (t->pid == pid && t->parent_pid == current_task->pid) {
+            if (t->state == TASK_ZOMBIE) {
+                if (t->waited) return -1;
+                t->waited = 1;
+                int code = t->exit_code;
+                scheduler_remove_zombie(pid);
+                return code;
+            }
+            while (t->state != TASK_ZOMBIE) {
+                scheduler_yield();
+            }
+            if (t->waited) return -1;
+            t->waited = 1;
+            int code = t->exit_code;
+            scheduler_remove_zombie(pid);
+            return code;
+        }
+        t = t->next;
+    }
+    return -1;
+}
+
+void task_block(task_t* task) {
+    if (task) {
+        task->state = TASK_BLOCKED;
+        scheduler_yield();
+    }
+}
+
+void task_wakeup(task_t* task) {
+    if (task && task->state == TASK_BLOCKED) {
+        task->state = TASK_READY;
+    }
+}

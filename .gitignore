@@ -1,0 +1,9 @@
+*.o
+*.bin
+*.elf
+*.a
+some-tiny-os.img
+tools/mkfs.tinyfs
+tools/tinyfs-add
+*.swp
+*~
