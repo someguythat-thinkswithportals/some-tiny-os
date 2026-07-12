@@ -32,7 +32,7 @@ alternatively you can do this to compile it and run it inside of QEMU
 ```bash
 git clone https://github.com/someguythat-thinkswithportals/some-tiny-os.git
 cd some-tiny-os
-./run.sh
+make run
 ```
 ## available make flags
 ```bash
