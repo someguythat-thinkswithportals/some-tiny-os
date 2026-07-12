@@ -10,7 +10,7 @@ alright, before you can try out the operating system on a virtual machine, you n
 
 if you have linux you can type this into the terminal:
 
-```
+```bash
 # debian/ubuntu
 sudo apt install make, gcc, nasm, qemu-system-x86-64
 
@@ -33,4 +33,11 @@ alternatively you can do this to compile it and run it inside of QEMU
 git clone https://github.com/someguythat-thinkswithportals/some-tiny-os.git
 cd some-tiny-os
 ./run.sh
+```
+## available make flags
+```bash
+make all
+make run
+make run-serial
+make clean
 ```
