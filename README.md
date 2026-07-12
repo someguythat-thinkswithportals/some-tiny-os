@@ -8,6 +8,17 @@ before you can try out the operating system on a virtual machine, you need to in
 * QEMU
 * make
 
+if you have linux you can type this into the terminal:
+
+```
+# debian/ubuntu
+sudo apt install make, gcc, nasm, qemu-system-x86-64
+
+# arch linux
+sudo pacman -S qemu-system-x86_64 make gcc nasm
+```
+if you use windows you can use the windows subsystem for linux (wsl)
+
 after you installed all of the essential software, its time to compile the OS and run it inside of QEMU
 ```
 git clone https://github.com/someguythat-thinkswithportals/some-tiny-os.git
