@@ -21,7 +21,7 @@ if you use windows you can use the windows subsystem for linux (wsl) to compile 
 
 anyways, after you installed all of the essential software, its time to compile the OS and run it inside of QEMU
 
-```
+```bash
 git clone https://github.com/someguythat-thinkswithportals/some-tiny-os.git
 cd some-tiny-os
 make all
@@ -29,7 +29,7 @@ qemu-system-x86_64 some-tiny-os.img
 ```
 alternatively you can do this to compile it and run it inside of QEMU
 
-```
+```bash
 git clone https://github.com/someguythat-thinkswithportals/some-tiny-os.git
 cd some-tiny-os
 ./run.sh
