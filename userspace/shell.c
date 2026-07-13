@@ -5,11 +5,24 @@
 
 static char line[LINE_MAX];
 static int line_pos;
+static volatile int got_sigint;
+
+static void sigint_handler(int sig) {
+    (void)sig;
+    got_sigint = 1;
+}
 
 static void shell_readline(void) {
     line_pos = 0;
+    got_sigint = 0;
     while (1) {
         char c = getchar();
+        if (got_sigint) {
+            putchar('\n');
+            line_pos = 0;
+            line[0] = 0;
+            return;
+        }
         if (c == '\n') {
             putchar('\n');
             line[line_pos] = 0;
@@ -297,6 +310,7 @@ static void execute(char* cmd) {
 }
 
 int main(void) {
+    signal(SIGINT, sigint_handler);
     printf("Welcome to some-tiny-os!\n");
     printf("Type 'help' for commands\n\n");
 

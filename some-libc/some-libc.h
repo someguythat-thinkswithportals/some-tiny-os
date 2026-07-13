@@ -42,6 +42,29 @@ void* memmove(void* dst, const void* src, int n);
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+// signals
+#define SIG_DFL  0
+#define SIG_IGN  1
+#define SIGINT   2
+#define SIGQUIT  3
+#define SIGKILL  9
+#define SIGUSR1  10
+#define SIGUSR2  12
+#define SIGPIPE  13
+#define SIGALRM  14
+#define SIGTERM  15
+#define SIGCHLD  17
+#define SIGCONT  18
+#define SIGSTOP  19
+#define NSIGS    32
+
+typedef void (*sighandler_t)(int);
+
+sighandler_t signal(int signum, sighandler_t handler);
+int sigaction(int signum, sighandler_t handler, void* trampoline);
+int kill(int pid, int sig);
+void sigreturn(void);
+
 typedef struct {
     int fd;
     char* buf;

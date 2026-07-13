@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "gdt.h"
 #include "pipe.h"
+#include "syscall.h"
 
 static task_t task_pool[MAX_TASKS];
 static int task_count;
@@ -14,6 +15,18 @@ static uint32_t next_pid;
 volatile uint64_t* pending_switch;
 volatile uint64_t pending_rsp;
 volatile uint64_t pending_cr3;
+
+void signal_init_task(task_t* task) {
+    for (int i = 0; i < NSIGS; i++)
+        task->signal_handlers[i] = SIG_DFL;
+    task->signal_pending = 0;
+    task->signal_mask = 0;
+    task->saved_rip = 0;
+    task->saved_rsp = 0;
+    task->saved_rflags = 0;
+    task->trampoline_addr = 0;
+    task->in_signal = 0;
+}
 
 task_t* get_current_task(void) {
     return current_task;
@@ -57,6 +70,7 @@ void scheduler_init(void) {
         main_task->fd_type[i] = 0;
         main_task->fd_data[i] = 0;
     }
+    signal_init_task(main_task);
     current_task = main_task;
     task_list = main_task;
     main_task->next = main_task;
@@ -84,6 +98,7 @@ int task_create(const char* name, void (*entry)(void)) {
         task->fd_type[i] = 0;
         task->fd_data[i] = 0;
     }
+    signal_init_task(task);
 
     task->stack_base = (uint64_t)memory_alloc(STACK_SIZE);
     if (!task->stack_base) return -1;
@@ -149,6 +164,13 @@ int sys_fork(uint64_t parent_rsp, uint64_t parent_cr3, registers_t* r) {
     child->waited = 0;
     vm_region_copy(child->vm_regions, parent->vm_regions);
     task_copy_fds(child, parent);
+
+    for (int i = 0; i < NSIGS; i++)
+        child->signal_handlers[i] = parent->signal_handlers[i];
+    child->signal_pending = 0;
+    child->signal_mask = parent->signal_mask;
+    child->trampoline_addr = parent->trampoline_addr;
+    child->in_signal = 0;
 
     child->stack_base = (uint64_t)memory_alloc(STACK_SIZE);
     if (!child->stack_base) return -1;
@@ -255,5 +277,96 @@ void task_block(task_t* task) {
 void task_wakeup(task_t* task) {
     if (task && task->state == TASK_BLOCKED) {
         task->state = TASK_READY;
+    }
+}
+
+int sys_kill(uint32_t pid, int sig) {
+    if (sig < 1 || sig >= NSIGS) return -1;
+
+    task_t* t = task_list;
+    do {
+        if (!t) { t = task_list; continue; }
+        if (t->pid == pid && t->state != TASK_ZOMBIE) {
+            t->signal_pending |= (1ULL << sig);
+            if (t->state == TASK_BLOCKED)
+                t->state = TASK_READY;
+            return 0;
+        }
+        t = t->next;
+    } while (t != task_list);
+    return -1;
+}
+
+static int default_action(int sig) {
+    switch (sig) {
+        case SIGKILL:  return 1;
+        case SIGSTOP:  return 1;
+        case SIGINT:   return 1;
+        case SIGQUIT:  return 1;
+        case SIGTERM:  return 1;
+        case SIGUSR1:  return 1;
+        case SIGUSR2:  return 1;
+        case SIGPIPE:  return 1;
+        case SIGCHLD:  return 0;
+        case SIGALRM:  return 0;
+        case SIGCONT:  return 0;
+        default:       return 1;
+    }
+}
+
+void signal_deliver(registers_t* r) {
+    task_t* task = current_task;
+    if (!task || task->pid == 0) return;
+
+    if (task->signal_pending & (1ULL << SIGKILL)) {
+        task->signal_pending = 0;
+        sys_exit(SIGKILL);
+        return;
+    }
+
+    if (task->in_signal) return;
+
+    uint64_t pending = task->signal_pending & ~task->signal_mask;
+    if (!pending) return;
+
+    for (int sig = 1; sig < NSIGS; sig++) {
+        if (!(pending & (1ULL << sig))) continue;
+        task->signal_pending &= ~(1ULL << sig);
+
+        uint64_t handler = task->signal_handlers[sig];
+        if (handler == SIG_DFL) {
+            if (default_action(sig)) {
+                sys_exit(sig);
+                return;
+            }
+            continue;
+        } else if (handler == SIG_IGN) {
+            continue;
+        } else {
+            task->saved_rip = r->rip;
+            task->saved_rsp = r->rsp;
+            task->saved_rflags = r->rflags;
+            task->in_signal = 1;
+
+            uint64_t sp = r->rsp - 8;
+            uint64_t page = sp & ~0xFFFULL;
+            uint64_t flags = paging_get_flags(task->cr3, page);
+            if (!(flags & PAGE_PRESENT)) {
+                uint64_t phys = (uint64_t)memory_alloc_page();
+                if (phys) {
+                    memory_set((void*)phys, 0, 4096);
+                    paging_map_4kb(task->cr3, page, phys,
+                                   PAGE_PRESENT | PAGE_RW | PAGE_USER);
+                }
+            }
+            uint64_t* user_sp = (uint64_t*)sp;
+            *user_sp = task->trampoline_addr;
+
+            r->rip = handler;
+            r->rsp = sp;
+            r->rdi = sig;
+            r->rflags &= ~0x100;
+            return;
+        }
     }
 }

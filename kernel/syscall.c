@@ -292,6 +292,33 @@ sbrk_done:
             r->rax = 0;
             break;
         }
+        case 26: {
+            int sig = (int)r->rdi;
+            uint64_t handler = r->rsi;
+            uint64_t trampoline = r->rdx;
+            if (sig < 1 || sig >= NSIGS) {
+                r->rax = -1;
+                break;
+            }
+            current_task->signal_handlers[sig] = handler;
+            if (trampoline)
+                current_task->trampoline_addr = trampoline;
+            r->rax = 0;
+            break;
+        }
+        case 27:
+            r->rax = sys_kill((uint32_t)r->rdi, (int)r->rsi);
+            break;
+        case 28: {
+            r->rip = current_task->saved_rip;
+            r->rsp = current_task->saved_rsp;
+            r->rflags = current_task->saved_rflags;
+            r->cs = 0x1B;
+            r->ss = 0x23;
+            current_task->in_signal = 0;
+            r->rax = 0;
+            break;
+        }
         default:
             r->rax = -1;
             break;

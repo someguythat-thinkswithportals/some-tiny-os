@@ -29,6 +29,9 @@
 #define SYS_PIPE     23
 #define SYS_DUP2     24
 #define SYS_CLOSE    25
+#define SYS_SIGACTION 26
+#define SYS_KILL     27
+#define SYS_SIGRETURN 28
 
 static inline int64_t _syscall(uint64_t num, uint64_t a0, uint64_t a1, uint64_t a2) {
     int64_t ret;

@@ -10,6 +10,22 @@
 #define STACK_SIZE 4096
 #define MAX_FDS 8
 
+#define SIG_DFL  0
+#define SIG_IGN  1
+#define NSIGS    32
+
+#define SIGINT   2
+#define SIGQUIT  3
+#define SIGKILL  9
+#define SIGUSR1  10
+#define SIGUSR2  12
+#define SIGPIPE  13
+#define SIGALRM  14
+#define SIGTERM  15
+#define SIGCHLD  17
+#define SIGCONT  18
+#define SIGSTOP  19
+
 typedef enum {
     TASK_READY,
     TASK_RUNNING,
@@ -31,6 +47,14 @@ typedef struct task {
     vm_region_t vm_regions[MAX_VM_REGIONS];
     uint8_t fd_type[MAX_FDS];
     void* fd_data[MAX_FDS];
+    uint64_t signal_handlers[NSIGS];
+    uint64_t signal_pending;
+    uint64_t signal_mask;
+    uint64_t saved_rip;
+    uint64_t saved_rsp;
+    uint64_t saved_rflags;
+    uint64_t trampoline_addr;
+    int in_signal;
 } task_t;
 
 void scheduler_init(void);
@@ -46,6 +70,10 @@ void scheduler_remove_zombie(uint32_t pid);
 
 void task_block(task_t* task);
 void task_wakeup(task_t* task);
+
+void signal_deliver(registers_t* r);
+int sys_kill(uint32_t pid, int sig);
+void signal_init_task(task_t* task);
 
 extern volatile uint64_t* pending_switch;
 extern volatile uint64_t pending_rsp;

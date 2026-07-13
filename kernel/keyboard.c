@@ -2,6 +2,7 @@
 #include "idt.h"
 #include "io.h"
 #include "serial.h"
+#include "scheduler.h"
 
 #define BUF_SIZE 256
 
@@ -60,6 +61,18 @@ static void keyboard_handler(registers_t* r) {
     }
 
     if (c) {
+        if (ctrl_pressed && (c == 'c' || c == 'C')) {
+            task_t* t = get_current_task();
+            if (t) {
+                task_t* start = t;
+                do {
+                    if (t->pid != 0 && t->state != TASK_ZOMBIE)
+                        t->signal_pending |= (1ULL << SIGINT);
+                    t = t->next;
+                } while (t != start);
+            }
+            return;
+        }
         int next = (head + 1) % BUF_SIZE;
         if (next != tail) {
             buf[head] = c;

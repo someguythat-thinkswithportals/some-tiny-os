@@ -221,4 +221,8 @@ void handle_interrupt(registers_t* r) {
         if (r->int_no >= 40) outb(0xA0, 0x20);
         outb(0x20, 0x20);
     }
+
+    if (r->cs == 0x1B) {
+        signal_deliver(r);
+    }
 }

@@ -2,7 +2,7 @@ CC := gcc
 CFLAGS := -ffreestanding -m64 -mno-red-zone -fno-builtin -fno-stack-protector -Wall -Wextra -I.
 AR := ar
 
-OBJS := crt0.o string.o stdio.o stdlib.o file.o
+OBJS := crt0.o string.o stdio.o stdlib.o file.o signal.o
 
 .PHONY: all clean
 
