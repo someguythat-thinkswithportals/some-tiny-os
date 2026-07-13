@@ -17,6 +17,8 @@ pipe_t* pipe_create(void) {
             pipe_pool[i].count = 0;
             pipe_pool[i].read_open = 1;
             pipe_pool[i].write_open = 1;
+            pipe_pool[i].read_refcnt = 0;
+            pipe_pool[i].write_refcnt = 0;
             pipe_pool[i].blocked_reader = 0;
             pipe_pool[i].blocked_writer = 0;
             return &pipe_pool[i];
@@ -89,22 +91,39 @@ void pipe_close_end(pipe_t* pipe, int end) {
     if (!pipe) return;
 
     if (end == 0) {
-        pipe->read_open = 0;
-        if (pipe->blocked_reader) {
-            task_wakeup(pipe->blocked_reader);
-            pipe->blocked_reader = 0;
+        if (pipe->read_refcnt > 0) pipe->read_refcnt--;
+        if (pipe->read_refcnt == 0) {
+            pipe->read_open = 0;
+            if (pipe->blocked_reader) {
+                task_wakeup(pipe->blocked_reader);
+                pipe->blocked_reader = 0;
+            }
         }
     } else {
-        pipe->write_open = 0;
-        if (pipe->blocked_writer) {
-            task_wakeup(pipe->blocked_writer);
-            pipe->blocked_writer = 0;
+        if (pipe->write_refcnt > 0) pipe->write_refcnt--;
+        if (pipe->write_refcnt == 0) {
+            pipe->write_open = 0;
+            if (pipe->blocked_writer) {
+                task_wakeup(pipe->blocked_writer);
+                pipe->blocked_writer = 0;
+            }
         }
     }
 
     if (!pipe->read_open && !pipe->write_open) {
         pipe->used = 0;
     }
+}
+
+void pipe_ref_inc(pipe_t* pipe, int end) {
+    if (!pipe) return;
+    if (end == 0) pipe->read_refcnt++;
+    else pipe->write_refcnt++;
+}
+
+void pipe_ref_dec(pipe_t* pipe, int end) {
+    if (!pipe) return;
+    pipe_close_end(pipe, end);
 }
 
 void task_close_fds(task_t* task) {
@@ -127,5 +146,9 @@ void task_copy_fds(task_t* dst, task_t* src) {
     for (int i = 0; i < MAX_FDS; i++) {
         dst->fd_type[i] = src->fd_type[i];
         dst->fd_data[i] = src->fd_data[i];
+        if (src->fd_type[i] == FD_PIPE_READ)
+            pipe_ref_inc((pipe_t*)src->fd_data[i], 0);
+        else if (src->fd_type[i] == FD_PIPE_WRITE)
+            pipe_ref_inc((pipe_t*)src->fd_data[i], 1);
     }
 }

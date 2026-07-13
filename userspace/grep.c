@@ -16,7 +16,6 @@ static int read_line(char* buf, int max) {
 
 int main(void) {
     char pattern[128];
-    printf("pattern: ");
     if (read_line(pattern, sizeof(pattern)) == 0) {
         return 1;
     }

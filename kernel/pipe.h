@@ -17,6 +17,8 @@ typedef struct pipe {
     uint32_t count;
     int read_open;
     int write_open;
+    int read_refcnt;
+    int write_refcnt;
     struct task* blocked_reader;
     struct task* blocked_writer;
     int used;
@@ -27,6 +29,8 @@ pipe_t* pipe_create(void);
 int pipe_read(pipe_t* pipe, char* buf, int len);
 int pipe_write(pipe_t* pipe, const char* buf, int len);
 void pipe_close_end(pipe_t* pipe, int end);
+void pipe_ref_inc(pipe_t* pipe, int end);
+void pipe_ref_dec(pipe_t* pipe, int end);
 
 typedef struct task task_t;
 

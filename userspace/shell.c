@@ -74,7 +74,12 @@ static void cmd_help(void) {
 static void cmd_cat(char* arg) {
     while (*arg == ' ') arg++;
     if (*arg == 0) {
-        printf("cat: missing filename\n");
+        char c;
+        while (1) {
+            int ret = read(0, &c, 1);
+            if (ret <= 0) break;
+            write(1, &c, 1);
+        }
         return;
     }
     char buf[256];
@@ -172,18 +177,57 @@ static void cmd_cd(char* arg) {
         printf("cd: no such directory\n");
 }
 
+static int read_line_from_fd(int fd, char* buf, int max) {
+    int pos = 0;
+    while (pos < max - 1) {
+        char c;
+        int ret = read(fd, &c, 1);
+        if (ret <= 0) break;
+        if (c == '\n') break;
+        buf[pos++] = c;
+    }
+    buf[pos] = 0;
+    return pos;
+}
+
+static void cmd_grep(char* arg) {
+    while (*arg == ' ') arg++;
+    if (*arg == 0) {
+        printf("grep: missing pattern\n");
+        return;
+    }
+    char pattern[128];
+    int pi = 0;
+    while (*arg && *arg != ' ' && pi < 127) pattern[pi++] = *arg++;
+    pattern[pi] = 0;
+
+    char line[256];
+    while (1) {
+        int len = read_line_from_fd(0, line, sizeof(line));
+        if (len == 0) break;
+        if (strstr(line, pattern)) {
+            puts(line);
+        }
+    }
+}
+
 static void cmd_exec(char* arg) {
     while (*arg == ' ') arg++;
     if (*arg == 0) {
         printf("exec: missing filename\n");
         return;
     }
+    char* p = arg;
+    while (*p && *p != ' ') p++;
+    char saved = 0;
+    if (*p == ' ') { saved = *p; *p = 0; }
     int ret = _syscall1(SYS_EXEC, (uint64_t)arg);
+    if (saved) *p = saved;
     if (ret < 0)
         printf("exec: failed\n");
 }
 
-static void execute(char* cmd);
+static void execute(char* cmd, int allow_exec);
 
 static void cmd_pipe(char* left, char* right) {
     while (*left == ' ') left++;
@@ -204,7 +248,7 @@ static void cmd_pipe(char* left, char* right) {
         _syscall2(SYS_DUP2, (uint64_t)fds[1], 1);
         _syscall1(SYS_CLOSE, (uint64_t)fds[0]);
         _syscall1(SYS_CLOSE, (uint64_t)fds[1]);
-        execute(left);
+        execute(left, 1);
         _syscall1(SYS_EXIT, 0);
     }
 
@@ -213,7 +257,7 @@ static void cmd_pipe(char* left, char* right) {
         _syscall2(SYS_DUP2, (uint64_t)fds[0], 0);
         _syscall1(SYS_CLOSE, (uint64_t)fds[0]);
         _syscall1(SYS_CLOSE, (uint64_t)fds[1]);
-        execute(right);
+        execute(right, 1);
         _syscall1(SYS_EXIT, 0);
     }
 
@@ -223,7 +267,7 @@ static void cmd_pipe(char* left, char* right) {
     _syscall1(SYS_WAITPID, (uint64_t)pid2);
 }
 
-static void execute(char* cmd) {
+static void execute(char* cmd, int allow_exec) {
     while (*cmd == ' ') cmd++;
     if (*cmd == 0) return;
 
@@ -253,6 +297,8 @@ static void execute(char* cmd) {
         printf("\n");
     } else if (startswith(cmd, "cat ")) {
         cmd_cat(cmd + 4);
+    } else if (strcmp(cmd, "cat") == 0) {
+        cmd_cat("");
     } else if (startswith(cmd, "ls")) {
         char* arg = 0;
         if (cmd[2] == ' ') arg = cmd + 3;
@@ -268,6 +314,10 @@ static void execute(char* cmd) {
         cmd_cd(cmd + 3);
     } else if (strcmp(cmd, "cd") == 0) {
         cmd_cd("");
+    } else if (startswith(cmd, "grep ")) {
+        cmd_grep(cmd + 5);
+    } else if (strcmp(cmd, "grep") == 0) {
+        cmd_grep("");
     } else if (startswith(cmd, "exec ")) {
         cmd_exec(cmd + 5);
     } else if (startswith(cmd, "cp ")) {
@@ -305,6 +355,14 @@ static void execute(char* cmd) {
             }
         }
     } else {
+        if (allow_exec) {
+            char saved = 0;
+            char* p = cmd;
+            while (*p && *p != ' ') p++;
+            if (*p == ' ') { saved = *p; *p = 0; }
+            _syscall1(SYS_EXEC, (uint64_t)cmd);
+            if (saved) *p = saved;
+        }
         printf("unknown command: %s\n", cmd);
     }
 }
@@ -317,7 +375,7 @@ int main(void) {
     while (1) {
         printf("some-tiny-os$ ");
         shell_readline();
-        execute(line);
+        execute(line, 0);
     }
     return 0;
 }

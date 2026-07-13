@@ -20,14 +20,13 @@ static void syscall_handler(registers_t* r) {
     switch (r->rax) {
         case 0: {
             int fd = (int)r->rdi;
-            if (fd == 1 || fd == 2) {
+            if (fd >= 0 && fd < MAX_FDS && current_task->fd_type[fd] == FD_PIPE_WRITE) {
+                r->rax = pipe_write((pipe_t*)current_task->fd_data[fd],
+                                    (const char*)r->rsi, (int)r->rdx);
+            } else if (fd == 1 || fd == 2) {
                 vga_write((const char*)r->rsi, r->rdx);
                 serial_write((const char*)r->rsi, r->rdx);
                 r->rax = r->rdx;
-            } else if (fd >= 3 && fd < MAX_FDS &&
-                       current_task->fd_type[fd] == FD_PIPE_WRITE) {
-                r->rax = pipe_write((pipe_t*)current_task->fd_data[fd],
-                                    (const char*)r->rsi, (int)r->rdx);
             } else {
                 r->rax = -1;
             }
@@ -35,13 +34,12 @@ static void syscall_handler(registers_t* r) {
         }
         case 1: {
             int fd = (int)r->rdi;
-            if (fd == 0) {
-                *(char*)r->rsi = keyboard_read();
-                r->rax = 1;
-            } else if (fd >= 3 && fd < MAX_FDS &&
-                       current_task->fd_type[fd] == FD_PIPE_READ) {
+            if (fd >= 0 && fd < MAX_FDS && current_task->fd_type[fd] == FD_PIPE_READ) {
                 r->rax = pipe_read((pipe_t*)current_task->fd_data[fd],
                                    (char*)r->rsi, (int)r->rdx);
+            } else if (fd == 0) {
+                *(char*)r->rsi = keyboard_read();
+                r->rax = 1;
             } else {
                 r->rax = -1;
             }
@@ -249,6 +247,8 @@ sbrk_done:
             current_task->fd_data[free1] = p;
             current_task->fd_type[free2] = FD_PIPE_WRITE;
             current_task->fd_data[free2] = p;
+            pipe_ref_inc(p, 0);
+            pipe_ref_inc(p, 1);
             int* user_fds = (int*)r->rdi;
             user_fds[0] = free1;
             user_fds[1] = free2;
@@ -266,14 +266,18 @@ sbrk_done:
                 r->rax = -1;
                 break;
             }
+            if (oldfd == newfd) {
+                r->rax = newfd;
+                break;
+            }
             if (current_task->fd_type[newfd] != 0) {
-                if (current_task->fd_type[newfd] == FD_PIPE_READ)
-                    pipe_close_end(current_task->fd_data[newfd], 0);
-                else if (current_task->fd_type[newfd] == FD_PIPE_WRITE)
-                    pipe_close_end(current_task->fd_data[newfd], 1);
+                pipe_ref_dec((pipe_t*)current_task->fd_data[newfd],
+                             current_task->fd_type[newfd] == FD_PIPE_READ ? 0 : 1);
             }
             current_task->fd_type[newfd] = current_task->fd_type[oldfd];
             current_task->fd_data[newfd] = current_task->fd_data[oldfd];
+            pipe_ref_inc((pipe_t*)current_task->fd_data[newfd],
+                         current_task->fd_type[newfd] == FD_PIPE_READ ? 0 : 1);
             r->rax = newfd;
             break;
         }

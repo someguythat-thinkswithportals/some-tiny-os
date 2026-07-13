@@ -209,16 +209,6 @@ void sys_exit(int code) {
     current_task->state = TASK_ZOMBIE;
     current_task->exit_code = code;
 
-    task_t* t = task_list;
-    while (t) {
-        if (t->state != TASK_ZOMBIE && t->state != TASK_RUNNING) {
-            t = t->next;
-            if (t == task_list) break;
-            continue;
-        }
-        break;
-    }
-
     __asm__ volatile("int $32");
     while (1) { __asm__ volatile("hlt"); }
 }
@@ -235,7 +225,8 @@ void scheduler_remove_zombie(uint32_t pid) {
                 task_pool[i].cr3 = 0;
             }
             task_pool[i].pid = 0;
-            task_pool[i].state = TASK_READY;
+            task_pool[i].state = TASK_ZOMBIE;
+            task_close_fds(&task_pool[i]);
             break;
         }
     }
