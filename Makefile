@@ -47,12 +47,6 @@ tools/tinyfs-add: tools/tinyfs-add.c
 some-libc/some-libc.a: some-libc/crt0.c some-libc/string.c some-libc/stdio.c some-libc/stdlib.c some-libc/file.c
 	$(MAKE) -C some-libc
 
-userspace/hello.o: userspace/hello.c some-libc/some-libc.h
-	$(CC) $(USER_CFLAGS) -c -o $@ $<
-
-userspace/hello.elf: userspace/hello.o some-libc/some-libc.a userspace/hello.ld
-	$(LD) -m elf_x86_64 -T userspace/hello.ld -o $@ userspace/hello.o some-libc/some-libc.a -static -e _start
-
 define build-user-program
 userspace/$(1).o: userspace/$(1).c some-libc/some-libc.h
 	$$(CC) $$(USER_CFLAGS) -c -o $$@ $$<
@@ -63,7 +57,7 @@ endef
 
 $(foreach prog,$(USER_PROGRAMS),$(eval $(call build-user-program,$(prog))))
 
-USER_ELFS := $(addprefix userspace/,$(addsuffix .elf,$(USER_PROGRAMS))) userspace/hello.elf
+USER_ELFS := $(addprefix userspace/,$(addsuffix .elf,$(USER_PROGRAMS)))
 
 kernel.elf: $(KERNEL_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJS)
@@ -83,7 +77,7 @@ some-tiny-os.img: boot/boot.bin boot/stage2.bin kernel.bin tools/mkfs.tinyfs too
 	./tools/tinyfs-add $@ userspace/echo.elf bin/echo
 	./tools/tinyfs-add $@ userspace/grep.elf bin/grep
 	./tools/tinyfs-add $@ userspace/shutdown.elf bin/shutdown
-	./tools/tinyfs-add $@ userspace/hello.elf bin/hello
+
 
 run: some-tiny-os.img
 	$(QEMU) -drive format=raw,file=$< -m 64M
