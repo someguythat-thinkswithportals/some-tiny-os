@@ -18,34 +18,6 @@ static void idle_task(void) {
     }
 }
 
-static void clock_task(void) {
-    uint64_t last = 0;
-    while (1) {
-        uint64_t now = timer_ticks();
-        if (now - last >= 100) {
-            last = now;
-            serial_write("CLOCK: ", 7);
-            uint64_t sec = now / 100;
-            char buf[16];
-            int pos = 0;
-            if (sec == 0) { buf[pos++] = '0'; }
-            else {
-                char rev[16];
-                int rpos = 0;
-                while (sec > 0) {
-                    rev[rpos++] = '0' + (sec % 10);
-                    sec /= 10;
-                }
-                for (int i = rpos - 1; i >= 0; i--) buf[pos++] = rev[i];
-            }
-            buf[pos++] = 's';
-            buf[pos++] = '\n';
-            serial_write(buf, pos);
-        }
-        __asm__ volatile("hlt");
-    }
-}
-
 static uint64_t userspace_entry;
 
 static void load_userspace(void) {
@@ -133,10 +105,6 @@ void kmain(void) {
     pipe_init();
     serial_write("Pipes OK\n", 9);
     vga_writestring("Pipes OK\n");
-
-    task_create("clock", clock_task);
-    serial_write("Clock task created\n", 19);
-    vga_writestring("Clock task created\n");
 
     task_create("idle", idle_task);
     serial_write("Idle task created\n", 18);
