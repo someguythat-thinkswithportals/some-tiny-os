@@ -43,7 +43,7 @@ static int find_dirent(uint32_t dir_inum, const char* name, uint32_t* out_inum) 
             tinyfs_dirent_t* entries = (tinyfs_dirent_t*)block;
             int count = TINYFS_DIRENTS_PER_BLOCK;
             for (int i = 0; i < count; i++) {
-                if (entries[i].inode == 0) continue;
+                if (entries[i].name[0] == '\0') continue;
                 if (string_compare(name, entries[i].name) == 0) {
                     *out_inum = entries[i].inode;
                     found = 1;
@@ -79,9 +79,11 @@ static int resolve_path(const char* path, uint32_t* out_inum) {
                 component[comp_pos] = 0;
 
                 if (component[0] == '.' && component[1] == '.' && component[2] == 0) {
-                    uint32_t parent_inum = 0;
-                    if (find_dirent(current, "..", &parent_inum) < 0) return -1;
-                    current = parent_inum;
+                    if (current != 0) {
+                        uint32_t parent_inum = 0;
+                        if (find_dirent(current, "..", &parent_inum) < 0) return -1;
+                        current = parent_inum;
+                    }
                 } else if (component[0] == '.' && component[1] == 0) {
                 } else {
                     uint32_t next;
@@ -124,7 +126,7 @@ int fs_ls(const char* path, char* buf, int buf_size) {
             tinyfs_dirent_t* entries = (tinyfs_dirent_t*)block;
             int count = TINYFS_DIRENTS_PER_BLOCK;
             for (int i = 0; i < count; i++) {
-                if (entries[i].inode == 0) continue;
+                if (entries[i].name[0] == '\0') continue;
                 int j = 0;
                 while (entries[i].name[j] && pos < buf_size - 2) {
                     buf[pos++] = entries[i].name[j++];
@@ -281,7 +283,7 @@ int fs_rmdir(const char* path) {
             tinyfs_dirent_t* entries = (tinyfs_dirent_t*)block;
             int count = TINYFS_DIRENTS_PER_BLOCK;
             for (int i = 0; i < count; i++) {
-                if (entries[i].inode == 0) continue;
+                if (entries[i].name[0] == '\0') continue;
                 if (string_compare(entries[i].name, ".") != 0 &&
                     string_compare(entries[i].name, "..") != 0) {
                     memory_free(block);

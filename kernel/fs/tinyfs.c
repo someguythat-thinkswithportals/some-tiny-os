@@ -137,7 +137,7 @@ int tinyfs_inode_alloc(void) {
         return -1;
     }
 
-    for (uint32_t i = 0; i < sb.inode_count; i++) {
+    for (uint32_t i = 1; i < sb.inode_count; i++) {
         if (!bitmap_test(bitmap, i)) {
             bitmap[i / 8] |= (1 << (i % 8));
             write_blocks(sb.inode_bitmap_block, 1, bitmap);
@@ -201,7 +201,7 @@ int tinyfs_add_dirent(uint32_t dir_inum, uint32_t ent_inum, const char* name) {
     int found = -1;
 
     for (int i = 0; i < TINYFS_DIRENTS_PER_BLOCK; i++) {
-        if (entries[i].inode != 0) continue;
+        if (entries[i].name[0] != '\0') continue;
         found = i;
         break;
     }
@@ -251,7 +251,7 @@ int tinyfs_remove_dirent(uint32_t dir_inum, const char* name) {
     int found = -1;
 
     for (int i = 0; i < TINYFS_DIRENTS_PER_BLOCK; i++) {
-        if (entries[i].inode == 0) continue;
+        if (entries[i].name[0] == '\0') continue;
         if (name_match(name, entries[i].name) == 0) {
             found = i;
             break;

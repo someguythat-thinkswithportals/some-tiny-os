@@ -52,6 +52,7 @@ static int shell_compare(const char* a, const char* b) {
 
 static void shell_cmd_help(void) {
     shell_write("Available commands:\n");
+    shell_write("  cd\n");
     shell_write("  help\n");
     shell_write("  echo\n");
     shell_write("  clear\n");
@@ -297,6 +298,16 @@ static void shell_execute(void) {
                 if (fs_rename(args, dst) < 0)
                     shell_write("mv: failed\n");
                 *src_end = ' ';
+            }
+        }
+    } else if (cmd[0] == 'c' && cmd[1] == 'd' && (cmd[2] == ' ' || cmd[2] == '\0')) {
+        char* arg = cmd[2] == ' ' ? cmd + 3 : NULL;
+        if (arg) while (*arg == ' ') arg++;
+        if (!arg || *arg == 0) {
+            fs_cd("/");
+        } else {
+            if (fs_cd(arg) < 0) {
+                shell_write("cd: no such directory\n");
             }
         }
     } else if (cmd[0] == 'e' && cmd[1] == 'x' && cmd[2] == 'e' && cmd[3] == 'c' && cmd[4] == ' ') {
