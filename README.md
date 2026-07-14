@@ -36,8 +36,9 @@ make run
 ```
 ## available make flags
 ```bash
-make all
-make run
-make run-serial
+make all # builds everything
+make run # builds everything and runs in qemu
+make run-serial # same thing as make run but it has serial stuff
+make kernel # builds the kernel
 make clean
 ```

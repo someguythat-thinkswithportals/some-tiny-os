@@ -9,16 +9,18 @@ CCFLAGS := -ffreestanding -m64 -mno-red-zone -fno-builtin -fno-stack-protector -
 USER_CFLAGS := -ffreestanding -m64 -mno-red-zone -fno-builtin -fno-stack-protector -Wall -Wextra -I some-libc
 LDFLAGS := -m elf_x86_64 -T kernel/kernel.ld -nostdlib
 
-USER_PROGRAMS := shell cat ls echo grep shutdown
+USER_PROGRAMS := shell cat ls echo grep shutdown touch uname
 
 KERNEL_OBJS := kernel/entry.o kernel/kernel.o kernel/vga.o kernel/gdt.o kernel/idt.o \
             kernel/isr.o kernel/keyboard.o kernel/timer.o kernel/memory.o kernel/syscall.o \
             kernel/shell.o kernel/serial.o kernel/scheduler.o kernel/elf.o kernel/cmos.o \
             kernel/pipe.o kernel/fs/ata.o kernel/fs/tinyfs.o kernel/fs/vfs.o
 
-.PHONY: all clean run
+.PHONY: all kernel clean run
 
 all: some-tiny-os.img
+
+kernel: kernel.elf
 
 boot/boot.bin: boot/boot.asm
 	$(NASM) -f bin -o $@ $<
@@ -77,6 +79,8 @@ some-tiny-os.img: boot/boot.bin boot/stage2.bin kernel.bin tools/mkfs.tinyfs too
 	./tools/tinyfs-add $@ userspace/echo.elf bin/echo
 	./tools/tinyfs-add $@ userspace/grep.elf bin/grep
 	./tools/tinyfs-add $@ userspace/shutdown.elf bin/shutdown
+	./tools/tinyfs-add $@ userspace/touch.elf bin/touch
+	./tools/tinyfs-add $@ userspace/uname.elf bin/uname
 
 
 run: some-tiny-os.img

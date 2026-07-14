@@ -68,6 +68,8 @@ static void cmd_help(void) {
     printf("  mv\n");
     printf("  cd\n");
     printf("  exec\n");
+    printf("  touch\n");
+    printf("  uname\n");
     printf("  cmd1 | cmd2  (pipe)\n");
 }
 
@@ -354,6 +356,18 @@ static void execute(char* cmd, int allow_exec) {
                 if (ret < 0) printf("mv: failed\n");
             }
         }
+    } else if (startswith(cmd, "touch ")) {
+        char* arg = cmd + 6;
+        while (*arg == ' ') arg++;
+        if (*arg == 0) {
+            printf("touch: missing file operand\n");
+        } else {
+            _syscall1(SYS_TOUCH, (uint64_t)arg);
+        }
+    } else if (strcmp(cmd, "touch") == 0) {
+        printf("touch: missing file operand\n");
+    } else if (strcmp(cmd, "uname") == 0) {
+        printf("some-tiny-os some-tiny-os 0.4 x86_64 some-tiny-os\n");
     } else {
         if (allow_exec) {
             char saved = 0;

@@ -809,3 +809,5 @@ cat_output: times 256 db 0
 date_output: times 32 db 0
 
 buffer:
+
+; end of the file

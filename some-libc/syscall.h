@@ -32,6 +32,7 @@
 #define SYS_SIGACTION 26
 #define SYS_KILL     27
 #define SYS_SIGRETURN 28
+#define SYS_TOUCH     29
 
 static inline int64_t _syscall(uint64_t num, uint64_t a0, uint64_t a1, uint64_t a2) {
     int64_t ret;

@@ -323,6 +323,9 @@ sbrk_done:
             r->rax = 0;
             break;
         }
+        case 29:
+            r->rax = fs_create((const char*)r->rdi);
+            break;
         default:
             r->rax = -1;
             break;

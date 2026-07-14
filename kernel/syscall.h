@@ -32,6 +32,7 @@
 #define SYS_SIGACTION 26
 #define SYS_KILL    27
 #define SYS_SIGRETURN 28
+#define SYS_TOUCH    29
 
 void syscall_init(void);
 
