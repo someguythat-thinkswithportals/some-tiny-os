@@ -99,6 +99,7 @@ static void syscall_handler(registers_t* r) {
         case 10:
             outw(0x604, 0x2000);
             outw(0xB004, 0x2000);
+            __asm__ volatile("cli; hlt");
             r->rax = 0;
             break;
         case 11:
@@ -325,6 +326,27 @@ sbrk_done:
         }
         case 29:
             r->rax = fs_create((const char*)r->rdi);
+            break;
+        case 30: {
+            size_t cr, cc;
+            vga_getpos(&cr, &cc);
+            r->rax = (cr << 16) | cc;
+            break;
+        }
+        case 31: {
+            vga_setpos(r->rdi, r->rsi);
+            r->rax = 0;
+            break;
+        }
+        case 32: {
+            const char* path = (const char*)r->rdi;
+            const char* data = (const char*)r->rsi;
+            uint32_t len = (uint32_t)r->rdx;
+            r->rax = fs_write_file(path, data, len);
+            break;
+        }
+        case 33:
+            r->rax = keyboard_data();
             break;
         default:
             r->rax = -1;

@@ -26,7 +26,7 @@ static void shell_write(const char* s) {
 static void shell_readline(void) {
     line_pos = 0;
     while (1) {
-        char c = keyboard_read();
+        int c = keyboard_read();
         if (c == '\n') {
             shell_putchar('\n');
             line[line_pos] = 0;
@@ -38,7 +38,7 @@ static void shell_readline(void) {
                 shell_putchar(' ');
                 shell_putchar('\b');
             }
-        } else if (c >= ' ' && line_pos < LINE_MAX - 1) {
+        } else if (c >= ' ' && c < 128 && line_pos < LINE_MAX - 1) {
             line[line_pos++] = c;
             shell_putchar(c);
         }

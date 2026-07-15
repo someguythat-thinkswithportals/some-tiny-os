@@ -111,6 +111,14 @@ int getchar(void) {
     return (unsigned char)c;
 }
 
+int getchar_nonblock(void) {
+    if (!_syscall0(SYS_KEYDATA)) return EOF;
+    char c;
+    int ret = _syscall3(SYS_READ, 0, (uint64_t)&c, 1);
+    if (ret <= 0) return EOF;
+    return (unsigned char)c;
+}
+
 int write(int fd, const void* buf, int len) {
     return (int)_syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)buf, (uint64_t)len);
 }

@@ -13,10 +13,22 @@ static inline uint16_t vga_entry(unsigned char c, uint8_t color) {
     return (uint16_t)c | (uint16_t)color << 8;
 }
 
+static void vga_cursor_update(void) {
+    uint16_t pos = (uint16_t)(row * VGA_WIDTH + col);
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)(pos >> 8));
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+}
+
 void vga_init(void) {
     row = 0;
     col = 0;
     color = VGA_LIGHT_GREY;
+    outb(0x3D4, 0x0A);
+    outb(0x3D5, 0x0E);
+    outb(0x3D4, 0x0B);
+    outb(0x3D5, 0x0F);
     vga_clear(VGA_BLACK);
 }
 
@@ -28,6 +40,11 @@ void vga_clear(uint8_t bg) {
     }
     row = 0;
     col = 0;
+    outb(0x3D4, 0x0A);
+    outb(0x3D5, 0x0E);
+    outb(0x3D4, 0x0B);
+    outb(0x3D5, 0x0F);
+    vga_cursor_update();
 }
 
 void vga_setcolor(uint8_t c) {
@@ -67,6 +84,7 @@ void vga_putchar(char c) {
         vga_scroll();
         row = VGA_HEIGHT - 1;
     }
+    vga_cursor_update();
 }
 
 void vga_write(const char* str, size_t len) {
@@ -85,6 +103,7 @@ void vga_setpos(size_t r, size_t c) {
     if (r < VGA_HEIGHT && c < VGA_WIDTH) {
         row = r;
         col = c;
+        vga_cursor_update();
     }
 }
 

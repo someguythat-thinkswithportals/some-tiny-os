@@ -489,6 +489,46 @@ int fs_copy(const char* src, const char* dst) {
     return 0;
 }
 
+int fs_write_file(const char* path, const char* data, uint32_t len) {
+    if (!path || path[0] == 0) return -1;
+
+    fs_delete(path);
+
+    if (fs_create(path) < 0) return -1;
+
+    uint32_t inum;
+    if (resolve_path(path, &inum) < 0) return -1;
+
+    tinyfs_inode_t inode;
+    if (tinyfs_read_inode(inum, &inode) < 0) return -1;
+
+    if (len == 0) return 0;
+
+    int block = tinyfs_block_alloc();
+    if (block < 0) return -1;
+
+    uint8_t* block_buf = (uint8_t*)memory_alloc(TINYFS_BLOCK_SIZE);
+    if (!block_buf) { tinyfs_block_free(block); return -1; }
+
+    memory_set(block_buf, 0, TINYFS_BLOCK_SIZE);
+    uint32_t chunk = len;
+    if (chunk > TINYFS_BLOCK_SIZE) chunk = TINYFS_BLOCK_SIZE;
+    for (uint32_t i = 0; i < chunk; i++) block_buf[i] = data[i];
+
+    if (tinyfs_write_block(block, block_buf) < 0) {
+        memory_free(block_buf);
+        tinyfs_block_free(block);
+        return -1;
+    }
+    memory_free(block_buf);
+
+    inode.direct_block = block;
+    inode.size = len;
+    if (tinyfs_write_inode(inum, &inode) < 0) return -1;
+
+    return len;
+}
+
 int fs_cd(const char* path) {
     if (!path || path[0] == 0 || (path[0] == '/' && path[1] == 0)) {
         cwd_inum = 0;

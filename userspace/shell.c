@@ -2,41 +2,316 @@
 #include <syscall.h>
 
 #define LINE_MAX 256
+#define HIST_SIZE 64
+#define HIST_FILE "/history"
+
+#define KEY_UP     0x80
+#define KEY_DOWN   0x81
+#define KEY_LEFT   0x82
+#define KEY_RIGHT  0x83
+#define KEY_HOME   0x84
+#define KEY_END    0x85
+#define KEY_DELETE 0x86
+
+#define MAX_COMPLETIONS 32
 
 static char line[LINE_MAX];
 static int line_pos;
+static int line_len;
+static int prompt_col;
 static volatile int got_sigint;
+
+static char hist_buf[HIST_SIZE][LINE_MAX];
+static int hist_count;
+static int hist_index;
 
 static void sigint_handler(int sig) {
     (void)sig;
     got_sigint = 1;
 }
 
+static uint32_t get_cursor(void) {
+    return (uint32_t)_syscall0(SYS_GET_CURSOR);
+}
+
+static void set_cursor(int row, int col) {
+    _syscall2(SYS_SET_CURSOR, (uint64_t)row, (uint64_t)col);
+}
+
+static void history_add(const char* cmd) {
+    if (!cmd || cmd[0] == 0) return;
+    if (hist_count > 0 && strcmp(hist_buf[(hist_count - 1) % HIST_SIZE], cmd) == 0) return;
+    int idx = hist_count % HIST_SIZE;
+    strncpy(hist_buf[idx], cmd, LINE_MAX - 1);
+    hist_buf[idx][LINE_MAX - 1] = 0;
+    hist_count++;
+    hist_index = hist_count;
+}
+
+static void history_load(void) {
+    char buf[4096];
+    int n = _syscall3(SYS_CAT, (uint64_t)HIST_FILE, (uint64_t)buf, 4096);
+    if (n <= 0) return;
+
+    hist_count = 0;
+    hist_index = 0;
+    int start = 0;
+    for (int i = 0; i <= n; i++) {
+        if (i == n || buf[i] == '\n') {
+            int len = i - start;
+            if (len > 0 && len < LINE_MAX) {
+                int idx = hist_count % HIST_SIZE;
+                for (int j = 0; j < len; j++) hist_buf[idx][j] = buf[start + j];
+                hist_buf[idx][len] = 0;
+                hist_count++;
+            }
+            start = i + 1;
+        }
+    }
+    hist_index = hist_count;
+}
+
+static void redraw_line(void) {
+    uint32_t cursor = get_cursor();
+    int row = cursor >> 16;
+
+    set_cursor(row, prompt_col);
+    for (int i = 0; i < line_len; i++) putchar(line[i]);
+    putchar(' ');
+    set_cursor(row, prompt_col + line_pos);
+}
+
+static const char* builtin_cmds[] = {
+    "cat", "cd", "clear", "cp", "date", "echo", "exec", "grep",
+    "help", "mkdir", "mv", "poweroff", "reboot", "rm", "rmdir",
+    "shutdown", "touch", "uname", "uptime", 0
+};
+
+static void tab_complete(void) {
+    int token_start_idx = 0;
+    int last_sp = -1;
+    for (int i = 0; i < line_pos; i++) {
+        if (line[i] == ' ') last_sp = i;
+    }
+    if (last_sp >= 0) token_start_idx = last_sp + 1;
+
+    char dir_path[256];
+    char file_prefix[256];
+    char* last_sl = 0;
+    int fp_len = line_pos - token_start_idx;
+
+    for (int i = token_start_idx; i < line_pos; i++) {
+        if (line[i] == '/') last_sl = line + i;
+    }
+
+    if (last_sl) {
+        int dir_len = last_sl - line + 1;
+        for (int i = 0; i < dir_len && i < 255; i++)
+            dir_path[i] = line[i];
+        dir_path[dir_len] = 0;
+        fp_len = line_pos - dir_len;
+        for (int i = 0; i < fp_len && i < 255; i++)
+            file_prefix[i] = line[dir_len + i];
+        file_prefix[fp_len] = 0;
+    } else {
+        dir_path[0] = 0;
+        for (int i = 0; i < fp_len && i < 255; i++)
+            file_prefix[i] = line[token_start_idx + i];
+        file_prefix[fp_len] = 0;
+    }
+
+    char matches[MAX_COMPLETIONS][LINE_MAX];
+    int match_count = 0;
+
+    if (token_start_idx == 0) {
+        for (int i = 0; builtin_cmds[i] && match_count < MAX_COMPLETIONS; i++) {
+            int clen = strlen(builtin_cmds[i]);
+            if (clen < fp_len) continue;
+            int ok = 1;
+            for (int j = 0; j < fp_len; j++) {
+                if (builtin_cmds[i][j] != file_prefix[j]) { ok = 0; break; }
+            }
+            if (ok) {
+                strcpy(matches[match_count], builtin_cmds[i]);
+                match_count++;
+            }
+        }
+    }
+
+    char list_buf[400];
+    int n = _syscall3(SYS_LS, (uint64_t)dir_path, (uint64_t)list_buf, 400);
+    if (n > 0) {
+        list_buf[n] = 0;
+        char* p = list_buf;
+        while (*p && match_count < MAX_COMPLETIONS) {
+            char* end = p;
+            while (*end && *end != '\n') end++;
+            int name_len = end - p;
+            if (name_len > 0) {
+                int ok = 1;
+                for (int i = 0; i < fp_len; i++) {
+                    if (i >= name_len || p[i] != file_prefix[i]) { ok = 0; break; }
+                }
+                if (ok) {
+                    for (int i = 0; i < name_len && i < LINE_MAX - 1; i++)
+                        matches[match_count][i] = p[i];
+                    matches[match_count][name_len] = 0;
+                    match_count++;
+                }
+            }
+            p = end;
+            if (*p == '\n') p++;
+        }
+    }
+
+    if (match_count == 0) return;
+
+    int prefix_len = fp_len;
+
+    if (match_count == 1) {
+        int match_len = strlen(matches[0]);
+        int add = match_len - prefix_len;
+        if (add > 0 && line_len + add < LINE_MAX - 1) {
+            for (int i = line_len; i >= line_pos; i--)
+                line[i + add] = line[i];
+            for (int i = 0; i < add; i++)
+                line[line_pos + i] = matches[0][prefix_len + i];
+            line_pos += add;
+            line_len += add;
+            line[line_len] = 0;
+        }
+        redraw_line();
+    } else {
+        int common = strlen(matches[0]);
+        for (int m = 1; m < match_count; m++) {
+            int lim = strlen(matches[m]);
+            if (lim < common) common = lim;
+            for (int i = 0; i < common; i++) {
+                if (matches[0][i] != matches[m][i]) { common = i; break; }
+            }
+        }
+
+        int add = common - prefix_len;
+        if (add > 0 && line_len + add < LINE_MAX - 1) {
+            for (int i = line_len; i >= line_pos; i--)
+                line[i + add] = line[i];
+            for (int i = 0; i < add; i++)
+                line[line_pos + i] = matches[0][prefix_len + i];
+            line_pos += add;
+            line_len += add;
+            line[line_len] = 0;
+        }
+
+        uint32_t cursor = get_cursor();
+        int row = cursor >> 16;
+        set_cursor(row, 0);
+        putchar('\n');
+        for (int i = 0; i < match_count; i++) {
+            printf("%s  ", matches[i]);
+        }
+        printf("\nsome-tiny-os$ ");
+        for (int i = 0; i < line_len; i++) putchar(line[i]);
+        cursor = get_cursor();
+        row = cursor >> 16;
+        set_cursor(row, prompt_col + line_pos);
+    }
+}
+
 static void shell_readline(void) {
     line_pos = 0;
+    line_len = 0;
+    line[0] = 0;
     got_sigint = 0;
+    hist_index = hist_count;
+
+    uint32_t cursor = get_cursor();
+    prompt_col = cursor & 0xFFFF;
+
     while (1) {
-        char c = getchar();
+        int c = getchar();
         if (got_sigint) {
             putchar('\n');
             line_pos = 0;
+            line_len = 0;
             line[0] = 0;
             return;
         }
+
         if (c == '\n') {
             putchar('\n');
-            line[line_pos] = 0;
+            line[line_len] = 0;
             return;
         } else if (c == '\b') {
             if (line_pos > 0) {
+                for (int i = line_pos - 1; i < line_len - 1; i++)
+                    line[i] = line[i + 1];
                 line_pos--;
-                putchar('\b');
-                putchar(' ');
-                putchar('\b');
+                line_len--;
+                line[line_len] = 0;
+                redraw_line();
             }
-        } else if (c >= ' ' && line_pos < LINE_MAX - 1) {
-            line[line_pos++] = c;
-            putchar(c);
+        } else if (c == KEY_DELETE) {
+            if (line_pos < line_len) {
+                for (int i = line_pos; i < line_len - 1; i++)
+                    line[i] = line[i + 1];
+                line_len--;
+                line[line_len] = 0;
+                redraw_line();
+            }
+        } else if (c == KEY_LEFT) {
+            if (line_pos > 0) {
+                line_pos--;
+                uint32_t cur = get_cursor();
+                set_cursor(cur >> 16, (cur & 0xFFFF) - 1);
+            }
+        } else if (c == KEY_RIGHT) {
+            if (line_pos < line_len) {
+                line_pos++;
+                uint32_t cur = get_cursor();
+                set_cursor(cur >> 16, (cur & 0xFFFF) + 1);
+            }
+        } else if (c == KEY_HOME) {
+            line_pos = 0;
+            redraw_line();
+        } else if (c == KEY_END) {
+            line_pos = line_len;
+            redraw_line();
+        } else if (c == KEY_UP) {
+            if (hist_count > 0 && hist_index > 0) {
+                hist_index--;
+                int idx = hist_index % HIST_SIZE;
+                strncpy(line, hist_buf[idx], LINE_MAX - 1);
+                line[LINE_MAX - 1] = 0;
+                line_len = strlen(line);
+                line_pos = line_len;
+                redraw_line();
+            }
+        } else if (c == KEY_DOWN) {
+            if (hist_index < hist_count) {
+                hist_index++;
+                if (hist_index == hist_count) {
+                    line[0] = 0;
+                    line_len = 0;
+                    line_pos = 0;
+                } else {
+                    int idx = hist_index % HIST_SIZE;
+                    strncpy(line, hist_buf[idx], LINE_MAX - 1);
+                    line[LINE_MAX - 1] = 0;
+                    line_len = strlen(line);
+                    line_pos = line_len;
+                }
+                redraw_line();
+            }
+        } else if (c == '\t') {
+            tab_complete();
+        } else if (c >= ' ' && c < 127 && line_len < LINE_MAX - 1) {
+            for (int i = line_len; i > line_pos; i--)
+                line[i] = line[i - 1];
+            line[line_pos] = c;
+            line_pos++;
+            line_len++;
+            line[line_len] = 0;
+            redraw_line();
         }
     }
 }
@@ -70,7 +345,6 @@ static void cmd_help(void) {
     printf("  exec\n");
     printf("  touch\n");
     printf("  uname\n");
-    printf("  cmd1 | cmd2  (pipe)\n");
 }
 
 static void cmd_cat(char* arg) {
@@ -166,9 +440,27 @@ static void cmd_reboot(void) {
     _syscall1(SYS_REBOOT, 0);
 }
 
-static void cmd_shutdown(void) {
-    printf("Shutting down...\n");
-    _syscall1(SYS_SHUTDOWN, 0);
+static void cmd_shutdown(char* arg) {
+    while (*arg == ' ') arg++;
+
+    if (*arg == 0) {
+        printf("Shutting down...\n");
+        _syscall1(SYS_SHUTDOWN, 0);
+    } else {
+        uint64_t delay_ms = 0;
+        char* p = arg;
+        while (*p >= '0' && *p <= '9') {
+            delay_ms = delay_ms * 10 + (*p - '0');
+            p++;
+        }
+        delay_ms *= 1000;
+        if (delay_ms > 0) {
+            printf("Shutting down in %llu seconds...\n", delay_ms / 1000);
+            _syscall1(SYS_SLEEP, delay_ms);
+        }
+        printf("Shutting down...\n");
+        _syscall1(SYS_SHUTDOWN, 0);
+    }
 }
 
 static void cmd_cd(char* arg) {
@@ -203,12 +495,12 @@ static void cmd_grep(char* arg) {
     while (*arg && *arg != ' ' && pi < 127) pattern[pi++] = *arg++;
     pattern[pi] = 0;
 
-    char line[256];
+    char lbuf[256];
     while (1) {
-        int len = read_line_from_fd(0, line, sizeof(line));
+        int len = read_line_from_fd(0, lbuf, sizeof(lbuf));
         if (len == 0) break;
-        if (strstr(line, pattern)) {
-            puts(line);
+        if (strstr(lbuf, pattern)) {
+            puts(lbuf);
         }
     }
 }
@@ -291,8 +583,10 @@ static void execute(char* cmd, int allow_exec) {
         cmd_date();
     } else if (strcmp(cmd, "reboot") == 0) {
         cmd_reboot();
+    } else if (startswith(cmd, "shutdown ")) {
+        cmd_shutdown(cmd + 8);
     } else if (strcmp(cmd, "shutdown") == 0 || strcmp(cmd, "poweroff") == 0 || strcmp(cmd, "exit") == 0) {
-        cmd_shutdown();
+        cmd_shutdown("");
     } else if (startswith(cmd, "echo ")) {
         cmd_echo(cmd + 5);
     } else if (strcmp(cmd, "echo") == 0) {
@@ -383,12 +677,14 @@ static void execute(char* cmd, int allow_exec) {
 
 int main(void) {
     signal(SIGINT, sigint_handler);
+    history_load();
     printf("Welcome to some-tiny-os!\n");
     printf("Type 'help' for commands\n\n");
 
     while (1) {
         printf("some-tiny-os$ ");
         shell_readline();
+        if (line[0]) history_add(line);
         execute(line, 0);
     }
     return 0;

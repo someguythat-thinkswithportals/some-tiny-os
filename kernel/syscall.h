@@ -33,6 +33,10 @@
 #define SYS_KILL    27
 #define SYS_SIGRETURN 28
 #define SYS_TOUCH    29
+#define SYS_GET_CURSOR 30
+#define SYS_SET_CURSOR 31
+#define SYS_WRITE_FILE 32
+#define SYS_KEYDATA    33
 
 void syscall_init(void);
 

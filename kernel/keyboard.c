@@ -28,10 +28,42 @@ static const char keymap_shift[] = {
 
 static int shift_pressed;
 static int ctrl_pressed;
+static int e0_prefix;
+
+enum { ESC_NORMAL, ESC_SEEN, ESC_CSI, ESC_CSI_DIGIT } esc_state;
+static char esc_param;
+
+static void buffer_char(char c) {
+    int next = (head + 1) % BUF_SIZE;
+    if (next != tail) {
+        buf[head] = c;
+        head = next;
+    }
+}
 
 static void keyboard_handler(registers_t* r) {
     (void)r;
     uint8_t scancode = inb(0x60);
+
+    if (scancode == 0xE0) {
+        e0_prefix = 1;
+        return;
+    }
+
+    if (e0_prefix) {
+        e0_prefix = 0;
+        if (scancode & 0x80) return;
+        switch (scancode) {
+            case 0x48: buffer_char(KEY_UP); return;
+            case 0x50: buffer_char(KEY_DOWN); return;
+            case 0x4B: buffer_char(KEY_LEFT); return;
+            case 0x4D: buffer_char(KEY_RIGHT); return;
+            case 0x47: buffer_char(KEY_HOME); return;
+            case 0x4F: buffer_char(KEY_END); return;
+            case 0x53: buffer_char(KEY_DELETE); return;
+        }
+        return;
+    }
 
     if (scancode == 0x2A || scancode == 0x36) {
         shift_pressed = 1;
@@ -60,24 +92,79 @@ static void keyboard_handler(registers_t* r) {
             c = keymap[scancode];
     }
 
-    if (c) {
-        if (ctrl_pressed && (c == 'c' || c == 'C')) {
-            task_t* t = get_current_task();
-            if (t) {
-                task_t* start = t;
-                do {
-                    if (t->pid != 0 && t->state != TASK_ZOMBIE)
-                        t->signal_pending |= (1ULL << SIGINT);
-                    t = t->next;
-                } while (t != start);
+    if (ctrl_pressed && (c == 'c' || c == 'C')) {
+        task_t* t = get_current_task();
+        if (t) {
+            task_t* start = t;
+            do {
+                if (t->pid != 0 && t->state != TASK_ZOMBIE)
+                    t->signal_pending |= (1ULL << SIGINT);
+                t = t->next;
+            } while (t != start);
+        }
+        esc_state = ESC_NORMAL;
+        return;
+    }
+
+    switch (esc_state) {
+        case ESC_NORMAL:
+            if (scancode == 0x01) {
+                esc_state = ESC_SEEN;
+                return;
             }
-            return;
-        }
-        int next = (head + 1) % BUF_SIZE;
-        if (next != tail) {
-            buf[head] = c;
-            head = next;
-        }
+            if (c) buffer_char(c);
+            break;
+
+        case ESC_SEEN:
+            if (scancode == 0x1A) {
+                esc_state = ESC_CSI;
+                return;
+            }
+            buffer_char('\x1b');
+            if (c) buffer_char(c);
+            esc_state = ESC_NORMAL;
+            break;
+
+        case ESC_CSI:
+            if (c >= 'A' && c <= 'D') {
+                buffer_char(KEY_UP + (c - 'A'));
+                esc_state = ESC_NORMAL;
+            } else if (c == 'H') {
+                buffer_char(KEY_HOME);
+                esc_state = ESC_NORMAL;
+            } else if (c == 'F') {
+                buffer_char(KEY_END);
+                esc_state = ESC_NORMAL;
+            } else if (c >= '1' && c <= '9') {
+                esc_param = c;
+                esc_state = ESC_CSI_DIGIT;
+            } else {
+                buffer_char('\x1b');
+                buffer_char('[');
+                if (c) buffer_char(c);
+                esc_state = ESC_NORMAL;
+            }
+            break;
+
+        case ESC_CSI_DIGIT:
+            if (c == '~') {
+                if (esc_param == '3') buffer_char(KEY_DELETE);
+                else if (esc_param == '1') buffer_char(KEY_HOME);
+                else if (esc_param == '4') buffer_char(KEY_END);
+                else {
+                    buffer_char('\x1b');
+                    buffer_char('[');
+                    buffer_char(esc_param);
+                    buffer_char('~');
+                }
+            } else {
+                buffer_char('\x1b');
+                buffer_char('[');
+                buffer_char(esc_param);
+                if (c) buffer_char(c);
+            }
+            esc_state = ESC_NORMAL;
+            break;
     }
 }
 
@@ -86,17 +173,19 @@ void keyboard_init(void) {
     tail = 0;
     shift_pressed = 0;
     ctrl_pressed = 0;
+    e0_prefix = 0;
+    esc_state = ESC_NORMAL;
     idt_register_handler(33, keyboard_handler);
 }
 
-char keyboard_read(void) {
+int keyboard_read(void) {
     while (head == tail) {
         if (serial_data_available()) {
             return serial_read();
         }
         __asm__ volatile("hlt");
     }
-    char c = buf[tail];
+    int c = (unsigned char)buf[tail];
     tail = (tail + 1) % BUF_SIZE;
     return c;
 }

@@ -9,6 +9,7 @@ int putchar(int c);
 int puts(const char* s);
 int printf(const char* fmt, ...);
 int getchar(void);
+int getchar_nonblock(void);
 int write(int fd, const void* buf, int len);
 int read(int fd, void* buf, int len);
 
