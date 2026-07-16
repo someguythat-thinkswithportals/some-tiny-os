@@ -25,6 +25,128 @@ static char hist_buf[HIST_SIZE][LINE_MAX];
 static int hist_count;
 static int hist_index;
 
+#define ENV_MAX 32
+#define ENV_KEY_MAX 32
+#define ENV_VAL_MAX 96
+#define ENV_FILE "/env"
+
+static char env_keys[ENV_MAX][ENV_KEY_MAX];
+static char env_vals[ENV_MAX][ENV_VAL_MAX];
+static int env_count;
+
+static void env_save(void) {
+    char buf[4096];
+    int pos = 0;
+    for (int i = 0; i < env_count; i++) {
+        int kl = strlen(env_keys[i]);
+        int vl = strlen(env_vals[i]);
+        if (pos + kl + 1 + vl + 1 >= 4095) break;
+        memcpy(buf + pos, env_keys[i], kl);
+        pos += kl;
+        buf[pos++] = '=';
+        memcpy(buf + pos, env_vals[i], vl);
+        pos += vl;
+        buf[pos++] = '\n';
+    }
+    _syscall3(SYS_WRITE_FILE, (uint64_t)ENV_FILE, (uint64_t)buf, (uint64_t)pos);
+}
+
+static void env_load(void) {
+    env_count = 0;
+    char buf[4096];
+    int n = _syscall3(SYS_CAT, (uint64_t)ENV_FILE, (uint64_t)buf, 4096);
+    if (n <= 0) return;
+
+    int start = 0;
+    for (int i = 0; i <= n && env_count < ENV_MAX; i++) {
+        if (i == n || buf[i] == '\n') {
+            int len = i - start;
+            int eq = -1;
+            for (int j = 0; j < len; j++) {
+                if (buf[start + j] == '=') { eq = j; break; }
+            }
+            if (eq > 0 && eq < ENV_KEY_MAX && len - eq - 1 < ENV_VAL_MAX) {
+                memcpy(env_keys[env_count], buf + start, eq);
+                env_keys[env_count][eq] = 0;
+                memcpy(env_vals[env_count], buf + start + eq + 1, len - eq - 1);
+                env_vals[env_count][len - eq - 1] = 0;
+                env_count++;
+            }
+            start = i + 1;
+        }
+    }
+}
+
+static const char* env_get(const char* key) {
+    for (int i = 0; i < env_count; i++) {
+        if (strcmp(env_keys[i], key) == 0)
+            return env_vals[i];
+    }
+    return 0;
+}
+
+static void env_set(const char* key, const char* value) {
+    for (int i = 0; i < env_count; i++) {
+        if (strcmp(env_keys[i], key) == 0) {
+            strncpy(env_vals[i], value, ENV_VAL_MAX - 1);
+            env_vals[env_count - 1][ENV_VAL_MAX - 1] = 0;
+            env_save();
+            return;
+        }
+    }
+    if (env_count >= ENV_MAX) {
+        printf("env: too many variables\n");
+        return;
+    }
+    strncpy(env_keys[env_count], key, ENV_KEY_MAX - 1);
+    env_keys[env_count][ENV_KEY_MAX - 1] = 0;
+    strncpy(env_vals[env_count], value, ENV_VAL_MAX - 1);
+    env_vals[env_count][ENV_VAL_MAX - 1] = 0;
+    env_count++;
+    env_save();
+}
+
+static void env_unset(const char* key) {
+    for (int i = 0; i < env_count; i++) {
+        if (strcmp(env_keys[i], key) == 0) {
+            for (int j = i; j < env_count - 1; j++) {
+                strcpy(env_keys[j], env_keys[j + 1]);
+                strcpy(env_vals[j], env_vals[j + 1]);
+            }
+            env_count--;
+            env_save();
+            return;
+        }
+    }
+}
+
+static int expand_env(const char* src, char* dst, int max) {
+    int di = 0;
+    int si = 0;
+    while (src[si] && di < max - 1) {
+        if (src[si] == '$' && src[si + 1] && src[si + 1] != ' ') {
+            si++;
+            char key[ENV_KEY_MAX];
+            int ki = 0;
+            while (src[si] && src[si] != ' ' && src[si] != '$' && ki < ENV_KEY_MAX - 1) {
+                key[ki++] = src[si++];
+            }
+            key[ki] = 0;
+            const char* val = env_get(key);
+            if (val) {
+                int vl = strlen(val);
+                if (di + vl >= max - 1) break;
+                memcpy(dst + di, val, vl);
+                di += vl;
+            }
+        } else {
+            dst[di++] = src[si++];
+        }
+    }
+    dst[di] = 0;
+    return di;
+}
+
 static void sigint_handler(int sig) {
     (void)sig;
     got_sigint = 1;
@@ -82,9 +204,9 @@ static void redraw_line(void) {
 }
 
 static const char* builtin_cmds[] = {
-    "cat", "cd", "clear", "cp", "date", "echo", "exec", "grep",
-    "help", "mkdir", "mv", "poweroff", "reboot", "rm", "rmdir",
-    "shutdown", "touch", "uname", "uptime", 0
+    "cat", "cd", "clear", "cp", "date", "echo", "env", "exec", "export",
+    "grep", "help", "mkdir", "mv", "poweroff", "reboot", "rm", "rmdir",
+    "shutdown", "touch", "uname", "unset", "uptime", 0
 };
 
 static void tab_complete(void) {
@@ -345,6 +467,9 @@ static void cmd_help(void) {
     printf("  exec\n");
     printf("  touch\n");
     printf("  uname\n");
+    printf("  export [KEY=VALUE]\n");
+    printf("  unset KEY\n");
+    printf("  env\n");
 }
 
 static void cmd_cat(char* arg) {
@@ -521,6 +646,81 @@ static void cmd_exec(char* arg) {
         printf("exec: failed\n");
 }
 
+static void cmd_export(char* arg) {
+    while (*arg == ' ') arg++;
+    if (*arg == 0) {
+        for (int i = 0; i < env_count; i++)
+            printf("declare -x %s=\"%s\"\n", env_keys[i], env_vals[i]);
+        return;
+    }
+    char* eq = strchr(arg, '=');
+    if (!eq) {
+        printf("export: usage: export KEY=VALUE\n");
+        return;
+    }
+    char key[ENV_KEY_MAX];
+    int ki = 0;
+    char* p = arg;
+    while (p < eq && ki < ENV_KEY_MAX - 1) key[ki++] = *p++;
+    key[ki] = 0;
+    const char* value = eq + 1;
+    env_set(key, value);
+}
+
+static void cmd_unset(char* arg) {
+    while (*arg == ' ') arg++;
+    if (*arg == 0) {
+        printf("unset: missing variable name\n");
+        return;
+    }
+    env_unset(arg);
+}
+
+static void cmd_env_list(void) {
+    for (int i = 0; i < env_count; i++)
+        printf("%s=%s\n", env_keys[i], env_vals[i]);
+}
+
+static void try_path_exec(char* cmd) {
+    const char* path = env_get("PATH");
+    if (!path) {
+        _syscall1(SYS_EXEC, (uint64_t)cmd);
+        return;
+    }
+    char pathbuf[256];
+    strncpy(pathbuf, path, 255);
+    pathbuf[255] = 0;
+
+    int cmd_name_len = 0;
+    while (cmd[cmd_name_len] && cmd[cmd_name_len] != ' ') cmd_name_len++;
+
+    char fullpath[320];
+    int start = 0;
+    int i = 0;
+    while (1) {
+        if (pathbuf[i] == ':' || pathbuf[i] == 0) {
+            char saved = pathbuf[i];
+            pathbuf[i] = 0;
+            int dir_len = i - start;
+            if (dir_len > 0) {
+                int fi = 0;
+                memcpy(fullpath, pathbuf + start, dir_len);
+                fi = dir_len;
+                fullpath[fi++] = '/';
+                memcpy(fullpath + fi, cmd, cmd_name_len);
+                fi += cmd_name_len;
+                fullpath[fi] = 0;
+                _syscall1(SYS_EXEC, (uint64_t)fullpath);
+            }
+            pathbuf[i] = saved;
+            start = i + 1;
+        }
+        if (pathbuf[i] == 0) break;
+        i++;
+    }
+    _syscall1(SYS_EXEC, (uint64_t)cmd);
+}
+
 static void execute(char* cmd, int allow_exec);
 
 static void cmd_pipe(char* left, char* right) {
@@ -564,6 +764,10 @@ static void cmd_pipe(char* left, char* right) {
 static void execute(char* cmd, int allow_exec) {
     while (*cmd == ' ') cmd++;
     if (*cmd == 0) return;
+
+    char expanded[LINE_MAX];
+    expand_env(cmd, expanded, LINE_MAX);
+    cmd = expanded;
 
     for (int i = 0; cmd[i]; i++) {
         if (cmd[i] == '|') {
@@ -662,13 +866,19 @@ static void execute(char* cmd, int allow_exec) {
         printf("touch: missing file operand\n");
     } else if (strcmp(cmd, "uname") == 0) {
         printf("some-tiny-os some-tiny-os 0.4 x86_64 some-tiny-os\n");
+    } else if (startswith(cmd, "export")) {
+        cmd_export(cmd + 6);
+    } else if (startswith(cmd, "unset ")) {
+        cmd_unset(cmd + 6);
+    } else if (strcmp(cmd, "env") == 0) {
+        cmd_env_list();
     } else {
         if (allow_exec) {
             char saved = 0;
             char* p = cmd;
             while (*p && *p != ' ') p++;
             if (*p == ' ') { saved = *p; *p = 0; }
-            _syscall1(SYS_EXEC, (uint64_t)cmd);
+            try_path_exec(cmd);
             if (saved) *p = saved;
         }
         printf("unknown command: %s\n", cmd);
@@ -678,6 +888,7 @@ static void execute(char* cmd, int allow_exec) {
 int main(void) {
     signal(SIGINT, sigint_handler);
     history_load();
+    env_load();
     printf("Welcome to some-tiny-os!\n");
     printf("Type 'help' for commands\n\n");
 
