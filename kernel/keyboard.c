@@ -181,7 +181,10 @@ void keyboard_init(void) {
 int keyboard_read(void) {
     while (head == tail) {
         if (serial_data_available()) {
-            return serial_read();
+            int c = serial_read();
+            if (c == '\r') c = '\n';
+            if (c == 0x7F) c = '\b';
+            return c;
         }
         __asm__ volatile("hlt");
     }

@@ -204,9 +204,9 @@ static void redraw_line(void) {
 }
 
 static const char* builtin_cmds[] = {
-    "cat", "cd", "clear", "cp", "date", "echo", "env", "exec", "export",
+    "cat", "cd", "clear", "cp", "date", "echo", "ed", "env", "exec", "export",
     "grep", "help", "mkdir", "mv", "poweroff", "reboot", "rm", "rmdir",
-    "shutdown", "touch", "uname", "unset", "uptime", 0
+    "shutdown", "sh", "touch", "uname", "unset", "uptime", 0
 };
 
 static void tab_complete(void) {
@@ -365,12 +365,18 @@ static void shell_readline(void) {
             return;
         } else if (c == '\b') {
             if (line_pos > 0) {
-                for (int i = line_pos - 1; i < line_len - 1; i++)
-                    line[i] = line[i + 1];
                 line_pos--;
                 line_len--;
+                for (int i = line_pos; i < line_len; i++)
+                    line[i] = line[i + 1];
                 line[line_len] = 0;
-                redraw_line();
+                if (line_pos == line_len) {
+                    putchar('\b');
+                    putchar(' ');
+                    putchar('\b');
+                } else {
+                    redraw_line();
+                }
             }
         } else if (c == KEY_DELETE) {
             if (line_pos < line_len) {
@@ -433,7 +439,11 @@ static void shell_readline(void) {
             line_pos++;
             line_len++;
             line[line_len] = 0;
-            redraw_line();
+            if (line_pos == line_len) {
+                putchar(c);
+            } else {
+                redraw_line();
+            }
         }
     }
 }
@@ -467,6 +477,8 @@ static void cmd_help(void) {
     printf("  exec\n");
     printf("  touch\n");
     printf("  uname\n");
+    printf("  ed\n");
+    printf("  sh FILE\n");
     printf("  export [KEY=VALUE]\n");
     printf("  unset KEY\n");
     printf("  env\n");
@@ -681,6 +693,32 @@ static void cmd_env_list(void) {
         printf("%s=%s\n", env_keys[i], env_vals[i]);
 }
 
+static void execute(char* cmd, int allow_exec);
+
+static void cmd_sh(char* arg) {
+    while (*arg == ' ') arg++;
+    if (*arg == 0) {
+        printf("sh: missing filename\n");
+        return;
+    }
+    FILE* f = fopen(arg, "r");
+    if (!f) {
+        printf("sh: cannot open: %s\n", arg);
+        return;
+    }
+    char buf[LINE_MAX];
+    while (fgets(buf, LINE_MAX, f)) {
+        int len = strlen(buf);
+        while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+            buf[--len] = 0;
+        char* p = buf;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == 0 || *p == '#') continue;
+        execute(p, 1);
+    }
+    fclose(f);
+}
+
 static void try_path_exec(char* cmd) {
     const char* path = env_get("PATH");
     if (!path) {
@@ -720,8 +758,6 @@ static void try_path_exec(char* cmd) {
     }
     _syscall1(SYS_EXEC, (uint64_t)cmd);
 }
-
-static void execute(char* cmd, int allow_exec);
 
 static void cmd_pipe(char* left, char* right) {
     while (*left == ' ') left++;
@@ -870,10 +906,40 @@ static void execute(char* cmd, int allow_exec) {
         cmd_export(cmd + 6);
     } else if (startswith(cmd, "unset ")) {
         cmd_unset(cmd + 6);
+    } else if (startswith(cmd, "sh ")) {
+        cmd_sh(cmd + 3);
+    } else if (strcmp(cmd, "sh") == 0) {
+        cmd_sh("");
+    } else if (startswith(cmd, "ed")) {
+        while (*cmd && *cmd != ' ') cmd++;
+        while (*cmd == ' ') cmd++;
+        int pid = _syscall0(SYS_FORK);
+        if (pid == 0) {
+            _syscall1(SYS_EXEC, (uint64_t)"/bin/ed");
+            printf("ed: not found\n");
+            _syscall1(SYS_EXIT, 127);
+        }
+        _syscall1(SYS_WAITPID, (uint64_t)pid);
     } else if (strcmp(cmd, "env") == 0) {
         cmd_env_list();
     } else {
-        if (allow_exec) {
+        int has_slash = 0;
+        for (int i = 0; cmd[i] && cmd[i] != ' '; i++) {
+            if (cmd[i] == '/') { has_slash = 1; break; }
+        }
+
+        if (has_slash) {
+            int pid = _syscall0(SYS_FORK);
+            if (pid == 0) {
+                _syscall1(SYS_EXEC, (uint64_t)cmd);
+                _syscall1(SYS_EXIT, 127);
+            }
+            int ret = (int)_syscall1(SYS_WAITPID, (uint64_t)pid);
+            if (ret == 127) {
+                cmd_sh(cmd);
+            }
+            return;
+        } else if (allow_exec) {
             char saved = 0;
             char* p = cmd;
             while (*p && *p != ' ') p++;

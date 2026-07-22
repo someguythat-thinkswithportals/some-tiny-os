@@ -9,7 +9,7 @@ CCFLAGS := -ffreestanding -m64 -mno-red-zone -fno-builtin -fno-stack-protector -
 USER_CFLAGS := -ffreestanding -m64 -mno-red-zone -fno-builtin -fno-stack-protector -Wall -Wextra -I some-libc
 LDFLAGS := -m elf_x86_64 -T kernel/kernel.ld -nostdlib
 
-USER_PROGRAMS := shell cat ls echo grep shutdown touch uname
+USER_PROGRAMS := shell cat ls echo grep shutdown touch uname ed
 
 KERNEL_OBJS := kernel/entry.o kernel/kernel.o kernel/vga.o kernel/gdt.o kernel/idt.o \
             kernel/isr.o kernel/keyboard.o kernel/timer.o kernel/memory.o kernel/syscall.o \
@@ -81,6 +81,8 @@ some-tiny-os.img: boot/boot.bin boot/stage2.bin kernel.bin tools/mkfs.tinyfs too
 	./tools/tinyfs-add $@ userspace/shutdown.elf bin/shutdown
 	./tools/tinyfs-add $@ userspace/touch.elf bin/touch
 	./tools/tinyfs-add $@ userspace/uname.elf bin/uname
+	./tools/tinyfs-add $@ userspace/ed.elf bin/ed
+	./tools/tinyfs-add $@ userspace/hello.sh hello.sh
 
 
 run: some-tiny-os.img

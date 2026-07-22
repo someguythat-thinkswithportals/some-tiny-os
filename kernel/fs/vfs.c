@@ -549,11 +549,7 @@ int fs_cd(const char* path) {
 int fs_cat(const char* name, char* buf, int buf_size) {
     uint32_t inum;
 
-    if (name[0] == '/') {
-        if (resolve_path(name, &inum) < 0) return -1;
-    } else {
-        if (find_dirent(cwd_inum, name, &inum) < 0) return -1;
-    }
+    if (resolve_path(name, &inum) < 0) return -1;
 
     tinyfs_inode_t inode;
     if (tinyfs_read_inode(inum, &inode) < 0) return -1;
