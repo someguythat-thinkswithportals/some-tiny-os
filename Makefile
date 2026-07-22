@@ -82,7 +82,6 @@ some-tiny-os.img: boot/boot.bin boot/stage2.bin kernel.bin tools/mkfs.tinyfs too
 	./tools/tinyfs-add $@ userspace/touch.elf bin/touch
 	./tools/tinyfs-add $@ userspace/uname.elf bin/uname
 	./tools/tinyfs-add $@ userspace/ed.elf bin/ed
-	./tools/tinyfs-add $@ userspace/hello.sh hello.sh
 
 
 run: some-tiny-os.img
