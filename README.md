@@ -1,4 +1,16 @@
-some-tiny-os is a unix-like operating system that was made from scratch. has a custom kernel, custom libc known as ```some-libc``` and a custom filesystem. it currently supports x86_64 but in the future there might be a 32-bit version of the operating system.
+```
+ ___  ___  _ __ ___   ___      | |_(_)_ __  _   _        ___  ___ 
+/ __|/ _ \| '_ ` _ \ / _ \_____| __| | '_ \| | | |_____ / _ \/ __|
+\__ \ (_) | | | | | |  __/_____| |_| | | | | |_| |_____| (_) \__ \
+|___/\___/|_| |_| |_|\___|      \__|_|_| |_|\__, |      \___/|___/
+                                            |___/  
+Some small, open-source, Unix-like operating system
+```
+<p align="center">
+ <img src="screenshots/some-tiny-os.png">
+</p>
+
+**some-tiny-os** is a unix-like operating system that was made from scratch. has a custom kernel, custom libc known as ```some-libc``` and a custom filesystem. it currently supports x86_64 but in the future there might be a 32-bit version of the operating system.
 
 # getting started
 alright, before you can try out the operating system on a virtual machine, you need to install the following software:

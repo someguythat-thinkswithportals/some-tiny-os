@@ -1,5 +1,5 @@
 ---
-name: Bug report
+name: some-tiny-os bug report
 about: create a report to help some-tiny-os improve
 title: ''
 labels: ''
@@ -7,8 +7,8 @@ assignees: ''
 
 ---
 
-**Describe the bug**
+**describe the bug**
 a clear and concise description of what the bug in some-tiny-os is.
 
-**Additional context**
+**additional context**
 add any other context about the problem here.
