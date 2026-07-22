@@ -54,3 +54,5 @@ make run-serial # same thing as make run but it has serial stuff
 make kernel # builds the kernel
 make clean
 ```
+
+and that's about it for now...
