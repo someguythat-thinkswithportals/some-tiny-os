@@ -54,5 +54,7 @@ make run-serial # same thing as make run but it has serial stuff
 make kernel # builds the kernel
 make clean
 ```
+# license
+this project is licensed under the [GPL-2.0 license](LICENSE)
 
 and that's about it for now...
